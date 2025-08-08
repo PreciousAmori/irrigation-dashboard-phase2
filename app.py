@@ -1,14 +1,26 @@
+"""
+Irrigation Recommendation Dashboard
+
+This Streamlit app integrates NOAA and Mesonet APIs to retrieve weather data,
+uses an XGBoost model to predict Soil Water Depletion (SWD), and generates
+field-level irrigation recommendations. Features include CGDD, ETr, ETa calculations,
+precipitation forecasts, and interactive visualizations.
+
+Author: Precious Amori
+"""
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import math
+import requests
 import joblib
 import os
-import requests 
+import math
+import datetime
+import altair as alt
+from datetime import datetime, timezone
 
 noaa_token = st.secrets["NOAA_TOKEN"]  # Make sure your .streamlit/secrets.toml file contains this
-
-import datetime
 
 #st.sidebar.subheader("📅 Date Range")
 #start_date = st.sidebar.date_input("Start Date", datetime.date.today() - datetime.timedelta(days=7))
@@ -16,8 +28,6 @@ import datetime
 
 @st.cache_data
 def fetch_awdn2_station_list():
-    import requests
-
     url = "https://awdn2.unl.edu/productdata/get"
     params = {"list": "scqc1440", "network": "nemesonet"}  # daily data for NE Mesonet
     response = requests.get(url, params=params)
@@ -31,8 +41,6 @@ def fetch_awdn2_station_list():
 
 
 def get_mesonet_weather(station_name, start_date, end_date):
-    import pandas as pd
-
     base_url = "https://awdn2.unl.edu/productdata/get"
     product_id = "scqc1440"  # Daily QC data
 
@@ -127,9 +135,6 @@ def fetch_noaa_weather(token, station_id, start_date, end_date):
     df_renamed["Date"] = pd.to_datetime(df_renamed["Date"])
     return df_renamed
 
-
-import requests
-import pandas as pd
 
 def get_noaa_48hr_forecast(lat, lon):
     try:
@@ -458,9 +463,6 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     df['Recommended_Irrigation_mm'] = (df['SWD_predictions'] - df['TD']).clip(lower=0)
     irrigation_recommended = df['Recommended_Irrigation_mm'].iloc[-1] > 0
 
-    import altair as alt
-    from datetime import datetime
-    from datetime import timezone
 
     # Optional forecast suggestion based on irrigation need
     if irrigation_recommended:
@@ -527,8 +529,6 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
         ["SWD_predictions", "MAD", "TD", "Kcr", "ETr", "ETa"],
         default=["SWD_predictions"]
     )
-
-    import altair as alt
 
     # ✅ Melt the data for selected metrics into long format
     melted = filtered.melt(
