@@ -1,0 +1,32 @@
+# Python bytecode and cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter notebook checkpoints (if applicable)
+.ipynb_checkpoints/
+
+# Ignore datasets and temporary files
+data/
+*.csv
+*.xlsx
+
+# Environment and secrets
+.env
+secrets.toml
+.streamlit/
+
+# Logs
+*.log
+
+# System and IDE files
+.DS_Store
+.vscode/
+
+# Pytest cache
+.pytest_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
