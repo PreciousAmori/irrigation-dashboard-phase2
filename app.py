@@ -186,19 +186,23 @@ field_lon = st.sidebar.number_input("Longitude (°)", value=-96.430, format="%.6
 #field_lat = st.sidebar.number_input("Field Latitude (°)", value=41.165)
 #field_lon = st.sidebar.number_input("Field Longitude (°)", value=-96.430)
 st.sidebar.subheader("📥 Upload Raw Dataset for SWD Predictions")
-raw_file = st.sidebar.file_uploader("Upload Implementation Dataset (CSV):", type=["csv"])
 default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard/main/data/ImplementationSET_corn_complete.csv"
+
+raw_file = st.sidebar.file_uploader("Upload Implementation Dataset (CSV):", type=["csv"])
 predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
 
 # If user doesn't upload anything, load the default from GitHub
 if raw_file is None:
     try:
-        raw_file = requests.get(default_url).content
-        raw_file = pd.read_csv(pd.compat.StringIO(raw_file.decode('utf-8')))
+        response = requests.get(default_url)
+        response.raise_for_status()
+        raw_df = pd.read_csv(StringIO(response.text))
         st.info("ℹ️ Using default implementation dataset from GitHub.")
     except Exception as e:
         st.warning(f"⚠️ Could not load default dataset: {e}")
-        raw_file = None
+        raw_df = None
+else:
+    raw_df = pd.read_csv(raw_file)
 
 #predict_button = st.sidebar.button("🚀 Generate SWD Predictions")
 st.sidebar.header("🔧 Model Parameters")
