@@ -187,7 +187,19 @@ field_lon = st.sidebar.number_input("Longitude (°)", value=-96.430, format="%.6
 #field_lon = st.sidebar.number_input("Field Longitude (°)", value=-96.430)
 st.sidebar.subheader("📥 Upload Raw Dataset for SWD Predictions")
 raw_file = st.sidebar.file_uploader("Upload Implementation Dataset (CSV):", type=["csv"])
+default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard/main/data/ImplementationSET_corn_complete.csv"
 predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
+
+# If user doesn't upload anything, load the default from GitHub
+if raw_file is None:
+    try:
+        raw_file = requests.get(default_url).content
+        raw_file = pd.read_csv(pd.compat.StringIO(raw_file.decode('utf-8')))
+        st.info("ℹ️ Using default implementation dataset from GitHub.")
+    except Exception as e:
+        st.warning(f"⚠️ Could not load default dataset: {e}")
+        raw_file = None
+
 #predict_button = st.sidebar.button("🚀 Generate SWD Predictions")
 st.sidebar.header("🔧 Model Parameters")
 FC = st.sidebar.number_input("Field Capacity (m³/m³)", value=0.41, step=0.01)
@@ -323,8 +335,11 @@ weather_file = st.sidebar.file_uploader("☀️ Upload Weather CSV", type=["csv"
 #predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
 
 if predict_button and raw_file is not None:
-    # ✅ Read raw implementation data
-    raw_df = pd.read_csv(raw_file)
+    if isinstance(raw_file, pd.DataFrame):
+        raw_df = raw_file
+    else:
+        raw_df = pd.read_csv(raw_file)
+
     id_df = raw_df[['Date','Management Plot ID']].copy()
     X_features = raw_df.drop(columns=['Date'], errors='ignore')
 
