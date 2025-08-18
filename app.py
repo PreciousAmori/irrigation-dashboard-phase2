@@ -405,7 +405,7 @@ if predict_button and raw_df is not None:
     predictions_df = id_df.rename(columns={"Management Plot ID": "Management_Plot_ID"})
     predictions_df['SWD_predictions'] = predictions
     st.session_state['pred_df'] = predictions_df
-    st.success("✅ SWD Predictions generated successfully! Scroll down to proceed.")
+    st.success("✅ SWD Predictions generated successfully! ! **Next:** scroll down and click **📡 Fetch Weather Data** to continue.")
     pred_df = predictions_df.copy()
 
 # Check if predictions are generated OR a CSV is uploaded
