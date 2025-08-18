@@ -391,12 +391,11 @@ if predict_button and raw_df is not None:
     scaler = joblib.load(scaler_path)
 
     # Align feature order if the scaler exposes it
-    if hasattr(scaler, 'feature_names_in_'):
-        missing = [c for c in scaler.feature_names_in_ if c not in X_features.columns]
-        if missing:
-            st.error(f"Missing expected features: {missing[:10]} ...")
-            st.stop()
-        X_features = X_features.loc[:, scaler.feature_names_in_]
+    if hasattr(scaler, "feature_names_in_"):
+        expected = pd.Index(scaler.feature_names_in_)
+        orig_cols = X_features.columns
+        # Reindex to expected order; fill any missing columns with 0.0 and drop extras
+        X_features = X_features.reindex(columns=expected, fill_value=0.0)
 
     # Transform & predict
     X_scaled = scaler.transform(X_features)
