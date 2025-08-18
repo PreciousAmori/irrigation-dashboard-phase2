@@ -190,21 +190,34 @@ st.sidebar.subheader("📥 Upload Raw Dataset for SWD Predictions")
 default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard/main/data/ImplementationSET_corn_complete.csv"
 
 raw_file = st.sidebar.file_uploader("Upload Implementation Dataset (CSV):", type=["csv"])
+load_default_btn = st.sidebar.button("📥 Load default dataset from GitHub", key="load_default")
 predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
 
 # If user doesn't upload anything, load the default from GitHub
+@st.cache_data(show_spinner=False)
+def _fetch_default_csv(url: str) -> pd.DataFrame:
+    r = requests.get(url, timeout=20)
+    r.raise_for_status()
+    return pd.read_csv(StringIO(r.text))
+
+# Build raw_df only on explicit action (upload OR button)
+raw_df = None
 if raw_file is not None:
     raw_df = pd.read_csv(raw_file)
     st.success("✅ Implementation dataset uploaded. **Next:** click **🚀 Generate SWD Predictions**.")
-else:
+elif load_default_btn:
     try:
-        response = requests.get(default_url, timeout=20)
-        response.raise_for_status()
-        raw_df = pd.read_csv(StringIO(response.text))
+        raw_df = _fetch_default_csv(default_url)
+        st.session_state["raw_df"] = raw_df  # persist across reruns
         st.success("✅ Default implementation dataset loaded from GitHub. **Next:** click **🚀 Generate SWD Predictions**.")
     except Exception as e:
-        st.warning(f"Could not load default dataset: {e}")
-        raw_df = None
+        st.error(f"Could not load default dataset: {e}")
+
+# If nothing newly loaded this run, reuse what we loaded previously
+if raw_df is None:
+    raw_df = st.session_state.get("raw_df")
+
+    
 
 #predict_button = st.sidebar.button("🚀 Generate SWD Predictions")
 st.sidebar.header("🔧 Model Parameters")
@@ -406,7 +419,7 @@ if predict_button and raw_df is not None:
     predictions_df = id_df.rename(columns={"Management Plot ID": "Management_Plot_ID"})
     predictions_df['SWD_predictions'] = predictions
     st.session_state['pred_df'] = predictions_df
-    st.success("✅ SWD Predictions generated successfully! ! **Next:** scroll down and click **📡 Fetch Weather Data** to continue.")
+    st.success("✅ SWD Predictions generated successfully! ! **Next:** scroll down to fetch Weather Data** to continue.")
     pred_df = predictions_df.copy()
 
 # Check if predictions are generated OR a CSV is uploaded
