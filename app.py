@@ -195,12 +195,13 @@ predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generat
 # If user doesn't upload anything, load the default from GitHub
 if raw_file is not None:
     raw_df = pd.read_csv(raw_file)
+    st.success("✅ Implementation dataset uploaded. **Next:** click **🚀 Generate SWD Predictions**.")
 else:
     try:
         response = requests.get(default_url, timeout=20)
         response.raise_for_status()
         raw_df = pd.read_csv(StringIO(response.text))
-        st.info("Using default implementation dataset from GitHub. **Next:** click **🚀 Generate SWD Predictions** in the sidebar.")
+        st.success("✅ Default implementation dataset loaded from GitHub. **Next:** click **🚀 Generate SWD Predictions**.")
     except Exception as e:
         st.warning(f"Could not load default dataset: {e}")
         raw_df = None
