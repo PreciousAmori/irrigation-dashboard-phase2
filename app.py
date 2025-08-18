@@ -200,7 +200,7 @@ else:
         response = requests.get(default_url, timeout=20)
         response.raise_for_status()
         raw_df = pd.read_csv(StringIO(response.text))
-        st.info("Using default implementation dataset from GitHub.")
+        st.info("Using default implementation dataset from GitHub. **Next:** click **🚀 Generate SWD Predictions** in the sidebar.")
     except Exception as e:
         st.warning(f"Could not load default dataset: {e}")
         raw_df = None
