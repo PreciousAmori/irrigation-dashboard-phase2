@@ -191,11 +191,11 @@ field_lon = st.sidebar.number_input("Longitude (°)", value=-96.430, format="%.6
 #st.sidebar.subheader("🌾 Field Location (for NOAA Fallback)")
 #field_lat = st.sidebar.number_input("Field Latitude (°)", value=41.165)
 #field_lon = st.sidebar.number_input("Field Longitude (°)", value=-96.430)
-st.sidebar.subheader("📥 Upload Raw Dataset for SWD Predictions")
+st.sidebar.subheader("📥 Load Daily Input for SWD Predictions")
 default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard/main/data/ImplementationSET_corn_complete.csv"
 
-raw_file = st.sidebar.file_uploader("Upload Implementation Dataset (CSV):", type=["csv"])
-load_default_btn = st.sidebar.button("📥 Load default dataset from GitHub", key="load_default")
+raw_file = st.sidebar.file_uploader("Upload daily input (CSV):", type=["csv"])
+load_default_btn = st.sidebar.button("📥 Load daily input data from GitHub", key="load_default")
 predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
 
 # If user doesn't upload anything, load the default from GitHub
