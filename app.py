@@ -377,7 +377,7 @@ if predict_button and raw_df is not None:
 
     # Features = everything except Date and ID (keep it simple + numeric)
     X_features = (raw_df
-                  .drop(columns=['Date', 'Management Plot ID'], errors='ignore')
+                  .drop(columns=['Date'], errors='ignore')
                   .select_dtypes(include=[np.number])
                   .fillna(0.0))
 
