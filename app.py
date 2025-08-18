@@ -214,7 +214,7 @@ elif load_default_btn:
     try:
         raw_df = _fetch_default_csv(default_url)
         st.session_state["raw_df"] = raw_df  # persist across reruns
-        st.success("✅ Default implementation dataset loaded from GitHub. **Next:** click **🚀 Generate SWD Predictions**.")
+        st.success("✅ Default daily input loaded from GitHub. **Next:** click **🚀 Generate SWD Predictions**.")
     except Exception as e:
         st.error(f"Could not load default dataset: {e}")
 
