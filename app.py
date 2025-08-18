@@ -170,9 +170,9 @@ def get_noaa_48hr_forecast(lat, lon):
 
 # ✅ Add these lines right after your imports:
 #MODEL_DIR = "models/trained"  # relative to where app.py is located
-MODEL_DIR = os.path.join("..", "models", "trained")
-model_path = os.path.join(MODEL_DIR, "XGBoost vs4.pkl")
-scaler_path = os.path.join(MODEL_DIR, "scaler_vs4.pkl")
+MODEL_DIR  = os.path.join("models", "trained")
+model_path = os.path.join(MODEL_DIR, "XGBoost_vs4.pkl")
+scaler_path= os.path.join(MODEL_DIR, "scaler_vs4.pkl")
 
 st.set_page_config(page_title="🌱 Irrigation Dashboard", layout="wide")
 st.title("🌱 Irrigation Recommendation Dashboard")
@@ -193,17 +193,17 @@ raw_file = st.sidebar.file_uploader("Upload Implementation Dataset (CSV):", type
 predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
 
 # If user doesn't upload anything, load the default from GitHub
-if raw_file is None:
+if raw_file is not None:
+    raw_df = pd.read_csv(raw_file)
+else:
     try:
-        response = requests.get(default_url)
+        response = requests.get(default_url, timeout=20)
         response.raise_for_status()
         raw_df = pd.read_csv(StringIO(response.text))
-        st.info("ℹ️ Using default implementation dataset from GitHub.")
+        st.info("Using default implementation dataset from GitHub.")
     except Exception as e:
-        st.warning(f"⚠️ Could not load default dataset: {e}")
+        st.warning(f"Could not load default dataset: {e}")
         raw_df = None
-else:
-    raw_df = pd.read_csv(raw_file)
 
 #predict_button = st.sidebar.button("🚀 Generate SWD Predictions")
 st.sidebar.header("🔧 Model Parameters")
@@ -339,35 +339,73 @@ weather_file = st.sidebar.file_uploader("☀️ Upload Weather CSV", type=["csv"
 #raw_file = st.sidebar.file_uploader("📥 Upload Implementation Dataset (CSV):", type=["csv"])
 #predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
 
-if predict_button and raw_file is not None:
-    if isinstance(raw_file, pd.DataFrame):
-        raw_df = raw_file
-    else:
-        raw_df = pd.read_csv(raw_file)
-
-    id_df = raw_df[['Date','Management Plot ID']].copy()
-    X_features = raw_df.drop(columns=['Date'], errors='ignore')
+#if predict_button and raw_df is not None:
+#    id_df = raw_df[['Date','Management Plot ID']].copy()
+#    X_features = raw_df.drop(columns=['Date'], errors='ignore')
 
     # ✅ Load model & scaler
+#    model = joblib.load(model_path)
+#    scaler = joblib.load(scaler_path)
+
+    # ✅ Predict
+#    X_scaled = scaler.transform(X_features)
+#    predictions = model.predict(X_scaled)
+
+#    predictions_df = id_df.copy()
+#    predictions_df['SWD_predictions'] = predictions
+
+#    predictions_df.rename(columns={"Management Plot ID": "Management_Plot_ID"}, inplace=True)
+
+    # ✅ Store in session_state so it persists
+#    st.session_state['pred_df'] = predictions_df
+
+#    st.success("✅ SWD Predictions generated successfully! Scroll down to proceed.")
+
+    # 🔥 Feed predictions_df into the rest of the pipeline
+#    pred_df = predictions_df.copy()
+
+# --- Predict on click, using raw_df (uploaded OR default) ---
+if predict_button and raw_df is not None:
+    # Expect these columns
+    if not {'Date', 'Management Plot ID'}.issubset(raw_df.columns):
+        st.error("Dataset must contain 'Date' and 'Management Plot ID'.")
+        st.stop()
+
+    # IDs for output; make sure Date is datetime
+    raw_df['Date'] = pd.to_datetime(raw_df['Date'], errors='coerce')
+    id_df = raw_df[['Date', 'Management Plot ID']].copy()
+
+    # Features = everything except Date and ID (keep it simple + numeric)
+    X_features = (raw_df
+                  .drop(columns=['Date', 'Management Plot ID'], errors='ignore')
+                  .select_dtypes(include=[np.number])
+                  .fillna(0.0))
+
+    # Load model + scaler (keep your existing paths)
     model = joblib.load(model_path)
     scaler = joblib.load(scaler_path)
 
-    # ✅ Predict
+    # If scaler knows feature order, align to it (safe, still short)
+    if hasattr(scaler, 'feature_names_in_'):
+        missing = [c for c in scaler.feature_names_in_ if c not in X_features.columns]
+        if missing:
+            st.error(f"Missing required features: {missing[:10]} ...")
+            st.stop()
+        X_features = X_features.loc[:, scaler.feature_names_in_]
+
+    # Predict
     X_scaled = scaler.transform(X_features)
     predictions = model.predict(X_scaled)
 
-    predictions_df = id_df.copy()
+    # Build output
+    predictions_df = id_df.rename(columns={"Management Plot ID": "Management_Plot_ID"})
     predictions_df['SWD_predictions'] = predictions
 
-    predictions_df.rename(columns={"Management Plot ID": "Management_Plot_ID"}, inplace=True)
-
-    # ✅ Store in session_state so it persists
+    # Persist + use downstream
     st.session_state['pred_df'] = predictions_df
-
     st.success("✅ SWD Predictions generated successfully! Scroll down to proceed.")
-
-    # 🔥 Feed predictions_df into the rest of the pipeline
     pred_df = predictions_df.copy()
+
 
 # Check if predictions are generated OR a CSV is uploaded
 if 'pred_df' not in st.session_state:
