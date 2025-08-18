@@ -176,6 +176,11 @@ scaler_path= os.path.join(MODEL_DIR, "scaler_vs4.pkl")
 
 st.set_page_config(page_title="🌱 Irrigation Dashboard", layout="wide")
 st.title("🌱 Irrigation Recommendation Dashboard")
+if "pred_df" not in st.session_state:
+    st.info(
+        "Enter field info → load daily input data → click **🚀 Generate SWD Predictions** → Enter agronomic info → Enter weather station info → **📡 Fetch Weather Data**."
+    )
+
 
 # === Sidebar: model parameters ===
 st.sidebar.subheader("📌 Field Information")
@@ -217,7 +222,7 @@ elif load_default_btn:
 if raw_df is None:
     raw_df = st.session_state.get("raw_df")
 
-    
+
 
 #predict_button = st.sidebar.button("🚀 Generate SWD Predictions")
 st.sidebar.header("🔧 Model Parameters")
@@ -419,7 +424,7 @@ if predict_button and raw_df is not None:
     predictions_df = id_df.rename(columns={"Management Plot ID": "Management_Plot_ID"})
     predictions_df['SWD_predictions'] = predictions
     st.session_state['pred_df'] = predictions_df
-    st.success("✅ SWD Predictions generated successfully! ! **Next:** scroll down to fetch Weather Data** to continue.")
+    st.success("✅ SWD Predictions generated successfully! ! **Next:** scroll down to continue.")
     pred_df = predictions_df.copy()
 
 # Check if predictions are generated OR a CSV is uploaded
