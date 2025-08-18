@@ -178,7 +178,7 @@ st.set_page_config(page_title="🌱 Irrigation Dashboard", layout="wide")
 st.title("🌱 Irrigation Recommendation Dashboard")
 if "pred_df" not in st.session_state:
     st.info(
-        "Enter field info → load daily input data → click **🚀 Generate SWD Predictions** → Enter agronomic info → Enter weather station info → **📡 Fetch Weather Data**."
+        "Enter field info → Load daily input data → click **🚀 Generate SWD Predictions** → Enter agronomic info → Enter weather station info → **📡 Fetch Weather Data**."
     )
 
 
