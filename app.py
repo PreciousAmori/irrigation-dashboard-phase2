@@ -428,16 +428,20 @@ if load_default_btn:
 
 
 # --- Choose the raw input source for predictions ---
+# Decide the source of the raw input: uploaded file takes precedence; otherwise use GitHub-loaded
 source_df = None
 if raw_file is not None:
     try:
+        raw_file.seek(0)                  # ← rewind the buffer
         source_df = pd.read_csv(raw_file)
-        st.sidebar.success(f"Using uploaded CSV ({source_df.shape[0]} rows).")
+    except pd.errors.EmptyDataError:
+        st.error("The uploaded CSV appears to be empty or could not be read.")
+        source_df = None
     except Exception as e:
-        st.sidebar.error(f"Couldn't read uploaded CSV: {e}")
+        st.error(f"Couldn't read uploaded CSV: {e}")
 elif "raw_df_default" in st.session_state:
     source_df = st.session_state["raw_df_default"]
-    st.sidebar.info(f"Using GitHub demo CSV ({source_df.shape[0]} rows).")
+
 
 # Optional tiny debug line:
 st.sidebar.caption(f"Demo loaded: {'raw_df_default' in st.session_state}")
