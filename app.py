@@ -29,9 +29,13 @@ import streamlit as st
 # =========================
 noaa_token = st.secrets["NOAA_TOKEN"]  # NOAA stays the same
 
-MODEL_DIR = os.path.join("..", "models", "trained")
-model_path = os.path.join(MODEL_DIR, "XGBoost vs4.pkl")
-scaler_path = os.path.join(MODEL_DIR, "scaler_vs4.pkl")
+# =========================
+# Model paths (use in-repo copies with underscore names)
+# =========================
+MODEL_DIR = os.path.join("models", "trained")
+model_path = os.path.join(MODEL_DIR, "XGBoost_vs4.pkl")  # underscore
+scaler_path = os.path.join(MODEL_DIR, "scaler_vs4.pkl")  # underscore
+
 
 # =========================
 # Streamlit page setup
