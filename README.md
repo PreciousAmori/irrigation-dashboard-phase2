@@ -1,7 +1,12 @@
 # 🌱 Irrigation Recommendation Dashboard
 
-Streamlit app that combines **Mesonet (agreport)** and **NOAA** weather with an XGBoost model to predict **Soil Water Depletion (SWD)** and generate field-level irrigation recommendations.  
-Includes CGDD, ETr/ETa, precipitation overlays, a demo dataset loader, and manual weather CSV upload.
+This Streamlit app integrates Mesonet (agreport) and NOAA weather data, as well as other features,
+uses an XGBoost model to predict Soil Water Depletion (SWD), and generates
+management plot-level irrigation recommendations. It supports chunked agreport fetches
+with timezone fallback, manual weather and daily model input CSV upload, CGDD/ETr/ETa calculations,
+precipitation forecasts, and interactive visualizations.
+
+Author: Precious Amori
 
 ---
 
