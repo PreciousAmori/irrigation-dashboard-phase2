@@ -183,12 +183,12 @@ This project integrates multiple open datasets and APIs to support research in p
 
 Special thanks to:
 
-- **Nebraska Mesonet (UNL)** — for providing weather and soil data via the `agreport` API  
-- **NOAA NCEI / Weather.gov** — for daily and hourly meteorological datasets  
-- **Planet Labs PBC** — for providing access to *PlanetScope* satellite imagery used in related analysis and validation workflows  
-- **USDA NRCS Web Soil Survey (WSS)** — for soil property and classification data supporting model input and field interpretation  
-- **USDA-NIFA Cyber-Physical Systems (CPS) Project** — for funding and research support  
-- **University of Nebraska–Lincoln, Department of Biological Systems Engineering** — for field operations, instrumentation, and academic support  
+- Nebraska Mesonet (UNL) — for providing weather and soil data via the `agreport` API  
+- NOAA NCEI / Weather.gov — for daily and hourly meteorological datasets  
+- Planet Labs PBC — for providing access to PlanetScope satellite imagery used in related analysis and validation workflows  
+- USDA NRCS Web Soil Survey (WSS) — for soil property and classification data supporting model input and field interpretation  
+- USDA-NIFA Cyber-Physical Systems (CPS) Project — for funding and research support  
+- University of Nebraska–Lincoln, Department of Biological Systems Engineering — for field operations, instrumentation, and academic support  
 
-> *PlanetScope imagery © 2023–2025 Planet Labs PBC, used under research license.*  
-> *Soil data © USDA NRCS Web Soil Survey (WSS).*
+> PlanetScope imagery © 2023–2025 Planet Labs PBC, used under research license.  
+> Soil data © USDA NRCS Web Soil Survey (WSS).
