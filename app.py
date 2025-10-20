@@ -687,9 +687,16 @@ if weather_file is not None:
 # ============================================================
 source_df = None
 if raw_file is not None:
-    source_df = pd.read_csv(raw_file)
+    try:
+        raw_file.seek(0)  # <-- critical on Streamlit Cloud
+        source_df = pd.read_csv(raw_file)
+    except pd.errors.EmptyDataError:
+        st.sidebar.error("Uploaded file looks empty. Please re-upload.")
+    except Exception as e:
+        st.sidebar.error(f"Couldn't read uploaded CSV: {e}")
 elif "raw_df_default" in st.session_state:
     source_df = st.session_state["raw_df_default"]
+
 
 if predict_button:
     if source_df is None:
