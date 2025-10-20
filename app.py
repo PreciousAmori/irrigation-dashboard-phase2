@@ -1,5 +1,5 @@
 """
-Irrigation Recommendation Dashboard
+Irrigation Recommendation Dashboard (ORIGINAL — uses Mesonet scqc1440)
 
 This Streamlit app integrates NOAA and Mesonet APIs to retrieve weather data,
 uses an XGBoost model to predict Soil Water Depletion (SWD), and generates
@@ -9,90 +9,252 @@ precipitation forecasts, and interactive visualizations.
 Author: Precious Amori
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import requests
-import joblib
+# =========================
+# Imports
+# =========================
+import io
 import os
 import math
-import datetime
-import altair as alt
-from io import StringIO
 from datetime import datetime, timezone
 
-noaa_token = st.secrets["NOAA_TOKEN"]  # Make sure your .streamlit/secrets.toml file contains this
+import numpy as np
+import pandas as pd
+import requests
+import joblib
+import altair as alt
+import streamlit as st
 
-#st.sidebar.subheader("📅 Date Range")
-#start_date = st.sidebar.date_input("Start Date", datetime.date.today() - datetime.timedelta(days=7))
-#end_date = st.sidebar.date_input("End Date", datetime.date.today())
+# =========================
+# Secrets / Paths
+# =========================
+noaa_token = st.secrets["NOAA_TOKEN"]  # NOAA stays the same
 
-@st.cache_data
-def fetch_awdn2_station_list():
-    url = "https://awdn2.unl.edu/productdata/get"
-    params = {"list": "scqc1440", "network": "nemesonet"}  # daily data for NE Mesonet
-    response = requests.get(url, params=params)
-    response.raise_for_status()
+MODEL_DIR = os.path.join("..", "models", "trained")
+model_path = os.path.join(MODEL_DIR, "XGBoost vs4.pkl")
+scaler_path = os.path.join(MODEL_DIR, "scaler_vs4.pkl")
 
-    data = response.json()  # This is a list, not a dict!
+# =========================
+# Streamlit page setup
+# =========================
+st.set_page_config(page_title="🌱 Irrigation Dashboard", layout="wide")
+st.title("🌱 Irrigation Recommendation Dashboard")
 
-    # ✅ Correct way to parse
-    stations = [item["name"] for item in data if "name" in item]
-    return sorted(stations)
+# ============================================================
+# Mesonet helpers (NEW — agreport + chunking, metric output)
+# ============================================================
+import io
+from urllib.parse import quote
 
+BASE = "https://awdn2.unl.edu/productdata/get"
 
-def get_mesonet_weather(station_name, start_date, end_date):
-    base_url = "https://awdn2.unl.edu/productdata/get"
-    product_id = "scqc1440"  # Daily QC data
+def _ymd(d) -> str:
+    return pd.to_datetime(d).strftime("%Y%m%d")
 
-    params = (
-        f"?name={station_name.replace(' ', '%20')}"
-        f"&productid={product_id}"
-        f"&begin={start_date}"
-        f"&end={end_date}"
-        f"&units=si"
-        f"&format=csv"
+def _build_url(name: str, end: str, days: int, tz: str, units: str = "si", fmt: str = "csv") -> str:
+    return (
+        f"{BASE}"
+        f"?name={quote(name)}"
+        f"&productid=agreport"
+        f"&end={pd.to_datetime(end).strftime('%Y%m%d')}"
+        f"&days={int(days)}"
+        f"&tz={tz}"
+        f"&units={units}"
+        f"&format={fmt}"
     )
-    url = base_url + params
-    df = pd.read_csv(url, skiprows=[0, 2])
 
-    # Clean and derive features
-    columns_to_drop = [
-        'AirTempMax2m_SCQC_Flag','AirTempMin2m_SCQC_Flag','PrecipTotal_SCQC_Flag',
-        'RelHumMax2m_SCQC_Flag','RelHumMin2m_SCQC_Flag','SoilTempMax10cm_SCQC_Flag',
-        'SoilTempMin10cm_SCQC_Flag','SolarTotal_SCQC_Flag','WindDirectionAvg2m_SCQC_Flag',
-        'WindSpeedAvg2m_SCQC_Flag','AtmPressureMax','AtmPressureMax_SCQC_Flag',
-        'AtmPressureMin','AtmPressureMin_SCQC_Flag'
-    ]
-    df_clean = df.drop(columns=[c for c in columns_to_drop if c in df.columns])
+def _fetch_agreport_chunk(
+    name: str,
+    end: str,
+    days: int,
+    tz: str,
+    connect_timeout: int = 10,
+    read_timeout: int = 120,
+    verbose: bool = False
+) -> pd.DataFrame:
+    """
+    Fetch one Mesonet 'agreport' chunk. If the provided tz triggers a 4xx (e.g., 400),
+    transparently retry with known-good fallbacks ('EST', then 'UTC').
+    """
+    def _try_with_tz(tz_try: str) -> pd.DataFrame:
+        url = _build_url(name, end, days, tz_try)
+        if verbose:
+            st.write(f"[GET] {url}")
+        r = requests.get(url, timeout=(connect_timeout, read_timeout))
+        r.raise_for_status()
+        # Mesonet CSV typically has metadata rows at [0] and [2]
+        return pd.read_csv(io.StringIO(r.text), skiprows=[0, 2])
 
-    df_clean["AvgRH"] = (df_clean["RelHumMax2m"] + df_clean["RelHumMin2m"]) / 2
-    df_clean["AvgSoilTemp10cm"] = (df_clean["SoilTempMax10cm"] + df_clean["SoilTempMin10cm"]) / 2
+    # Try the requested tz first, then fallbacks
+    tz_candidates = [tz] + ([t for t in ["EST", "UTC"] if t != tz])
+    last_err = None
 
-    df_clean = df_clean.drop(columns=[
-        "RelHumMax2m", "RelHumMin2m",
-        "SoilTempMax10cm", "SoilTempMin10cm",
-        "WindDirectionAvg2m"
-    ])
+    for tz_try in tz_candidates:
+        try:
+            df = _try_with_tz(tz_try)
+            if tz_try != tz and verbose:
+                st.info(f"Mesonet tz '{tz}' failed, used fallback '{tz_try}'.")
+            return df
+        except requests.HTTPError as e:
+            # 4xx/5xx → try next candidate
+            last_err = e
+        except Exception as e:
+            last_err = e
 
-    df_clean = df_clean.rename(columns={
-        "AirTempMax2m": "T_High_C",
-        "AirTempMin2m": "T_Low_C",
-        "AvgRH": "Rel Hum %",
-        "AvgSoilTemp10cm": "Soil Tmp C@10cm",
-        "WindSpeedAvg2m": "Wind Sp. m/s",
-        "SolarTotal": "SolarRad MJ/m^2/d",
-        "PrecipTotal": "Precip mm",
-        "TIMESTAMP": "Date"
+    # If all attempts failed, bubble up the last error
+    raise last_err if last_err else RuntimeError("Mesonet request failed for all tz candidates.")
+
+
+import math  # ⟵ add near your imports
+
+@st.cache_data(show_spinner=False)
+def fetch_agreport_chunked(name: str, start_date, end_date, tz: str = "CST6CDT",
+                           chunk_days: int = 10, connect_timeout: int = 10, read_timeout: int = 120,
+                           verbose: bool = False, show_progress: bool = False) -> pd.DataFrame:
+    """
+    Pull Mesonet 'agreport' in chunks (end+days windows), stitch into one DataFrame.
+    Returns the raw (US-units) agreport table exactly as Mesonet sends it.
+    """
+    start = pd.to_datetime(start_date).normalize()
+    end   = pd.to_datetime(end_date).normalize()
+    if end < start:
+        raise ValueError("end_date must be >= start_date")
+
+    # --- Progress setup (accurate by number of chunks) ---
+    total_days   = (end - start).days + 1
+    total_chunks = max(1, math.ceil(total_days / max(1, int(chunk_days))))
+    progress = st.progress(0) if show_progress else None
+    done = 0
+    # ------------------------------------------------------
+
+    out = []
+    # Walk backwards in inclusive 10-day windows (or chunk_days)
+    cur_end = end
+    while cur_end >= start:
+        # Window start for this chunk
+        cur_start = max(start, cur_end - pd.Timedelta(days=chunk_days - 1))
+        days = (cur_end - cur_start).days + 1
+        try:
+            dfc = _fetch_agreport_chunk(name, cur_end, days, tz,
+                                        connect_timeout=connect_timeout,
+                                        read_timeout=read_timeout,
+                                        verbose=verbose)
+            out.append(dfc)
+        except Exception as e:
+            if verbose:
+                st.warning(f"[CHUNK ERROR] {cur_start.date()}–{cur_end.date()}: {e}")
+            raise
+        finally:
+            # advance progress whether success or failure
+            done += 1
+            if progress:
+                progress.progress(min(done / total_chunks, 1.0))
+
+        # Next window ends the day before this chunk’s start
+        cur_end = cur_start - pd.Timedelta(days=1)
+
+    if progress:
+        progress.empty()
+
+    if not out:
+        return pd.DataFrame()
+
+    df_raw = pd.concat(out, ignore_index=True) 
+
+
+    # Normalize headers / dates / dedupe by day (overlap between chunks is expected)
+    df_raw.columns = df_raw.columns.str.strip()
+    if "Timestamp" in df_raw.columns:
+        df_raw["Timestamp"] = pd.to_datetime(df_raw["Timestamp"], errors="coerce").dt.date
+        df_raw = (
+            df_raw.dropna(subset=["Timestamp"])
+                  .drop_duplicates(subset=["Timestamp"], keep="last")
+                  .sort_values("Timestamp")
+                  .reset_index(drop=True)
+        )
+    # Trim to requested window (belt & suspenders)
+    if "Timestamp" in df_raw.columns:
+        m = (pd.to_datetime(df_raw["Timestamp"]) >= start) & (pd.to_datetime(df_raw["Timestamp"]) <= end)
+        df_raw = df_raw.loc[m].reset_index(drop=True)
+
+    return df_raw
+
+def to_metric_8cols(df_ag: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert the Ag Report (US units) to the 8-column metric schema:
+    Date, T_High_C, T_Low_C, Rel Hum %, Soil Tmp C@10cm, Wind Sp. m/s, SolarRad MJ/m^2/d, Precip mm
+    """
+    # Soft rename from Mesonet agreport headers
+    ren = {
+        "Timestamp": "Date",
+        "Max Temperature (F)": "Tmax_F",
+        "Min Temperature (F)": "Tmin_F",
+        "Relative Humidity (%)": "RH_pct",
+        "Soil Temperature at 4 inches (F)": "SoilTemp4in_F",
+        "Solar Radiation (MJ/m^2/day)": "Solar_MJm2d",
+        "Precipitation (in)": "Precip_in",
+        "Wind Speed (mph)": "Wind_mph",
+    }
+    df = df_ag.rename(columns={k: v for k, v in ren.items() if k in df_ag.columns}).copy()
+
+    need = ["Date","Tmax_F","Tmin_F","RH_pct","SoilTemp4in_F","Solar_MJm2d","Precip_in","Wind_mph"]
+    miss = [c for c in need if c not in df.columns]
+    if miss:
+        raise ValueError(f"Ag Report missing expected columns: {miss}")
+
+    # Unit conversions
+    f2c    = lambda f: (pd.to_numeric(f, errors="coerce") - 32.0) * (5.0/9.0)
+    mph2ms = lambda v: pd.to_numeric(v, errors="coerce") * 0.44704
+    in2mm  = lambda x: pd.to_numeric(x, errors="coerce") * 25.4
+
+    out = pd.DataFrame()
+    out["Date"] = pd.to_datetime(df["Date"], errors="coerce").dt.normalize()
+    out["T_High_C"]            = f2c(df["Tmax_F"])
+    out["T_Low_C"]             = f2c(df["Tmin_F"])
+    out["Rel Hum %"]           = pd.to_numeric(df["RH_pct"], errors="coerce")
+    out["Soil Tmp C@10cm"]     = f2c(df["SoilTemp4in_F"])      # 4 in ≈ 10.16 cm
+    out["Wind Sp. m/s"]        = mph2ms(df["Wind_mph"])
+    out["SolarRad MJ/m^2/d"]   = pd.to_numeric(df["Solar_MJm2d"], errors="coerce")  # already MJ/m²/day
+    out["Precip mm"]           = in2mm(df["Precip_in"])
+
+    out = out.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
+
+    # Match your previous formatting
+    out = out.round({
+        "T_High_C": 2, "T_Low_C": 2, "Rel Hum %": 2, "Soil Tmp C@10cm": 3,
+        "Wind Sp. m/s": 2, "SolarRad MJ/m^2/d": 2, "Precip mm": 2
     })
 
-    df_clean = df_clean[[
-        "Date", "T_High_C", "T_Low_C", "Rel Hum %",
-        "Soil Tmp C@10cm", "Wind Sp. m/s", "SolarRad MJ/m^2/d", "Precip mm"
-    ]]
-    df_clean["Date"] = pd.to_datetime(df_clean["Date"])
+    return out[["Date","T_High_C","T_Low_C","Rel Hum %","Soil Tmp C@10cm","Wind Sp. m/s","SolarRad MJ/m^2/d","Precip mm"]]
+
+@st.cache_data(show_spinner=False)
+def get_mesonet_weather(name: str, start_date, end_date, tz: str = "CST6CDT",
+                        chunk_days: int = 10, connect_timeout: int = 10, read_timeout: int = 120,
+                        verbose: bool = False, show_progress: bool = False) -> pd.DataFrame:
+    # fetch raw agreport chunks (US units)
+    df_raw = fetch_agreport_chunked(
+        name, start_date, end_date, tz=tz,
+        chunk_days=chunk_days,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        verbose=verbose,
+        show_progress=show_progress,  # <-- added
+    )
+    if df_raw.empty:
+        return df_raw
+
+    # convert to your 8-column metric schema
+    df_clean = to_metric_8cols(df_raw)
+
+    # final guard: clamp to [start, end]
+    s = pd.to_datetime(start_date).normalize()
+    e = pd.to_datetime(end_date).normalize()
+    df_clean = df_clean[(df_clean["Date"] >= s) & (df_clean["Date"] <= e)].reset_index(drop=True)
     return df_clean
 
+
+# ============================================================
+# NOAA daily (unchanged)
+# ============================================================
 def fetch_noaa_weather(token, station_id, start_date, end_date):
     url = "https://www.ncei.noaa.gov/cdo-web/api/v2/data"
     headers = {"token": token}
@@ -104,7 +266,6 @@ def fetch_noaa_weather(token, station_id, start_date, end_date):
         "limit": 1000,
         "units": "metric"
     }
-
     response = requests.get(url, headers=headers, params=params)
     if response.status_code != 200:
         st.warning(f"NOAA API Error {response.status_code}: {response.text}")
@@ -116,18 +277,16 @@ def fetch_noaa_weather(token, station_id, start_date, end_date):
 
     wanted = ["TMAX", "TMIN", "PRCP", "AWND", "RHAV"]
     df = df[df['datatype'].isin(wanted)]
-
     df_pivot = df.pivot_table(index="date", columns="datatype", values="value", aggfunc="first").reset_index()
 
-    rename_map = {
+    df_renamed = df_pivot.rename(columns={
         "date": "Date",
         "TMAX": "T_High_C",
         "TMIN": "T_Low_C",
         "PRCP": "Precip mm",
         "AWND": "Wind Sp. m/s",
         "RHAV": "Rel Hum %"
-    }
-    df_renamed = df_pivot.rename(columns=rename_map)
+    })
 
     for col in ["T_High_C", "T_Low_C", "Precip mm"]:
         if col in df_renamed.columns:
@@ -136,112 +295,92 @@ def fetch_noaa_weather(token, station_id, start_date, end_date):
     df_renamed["Date"] = pd.to_datetime(df_renamed["Date"])
     return df_renamed
 
-
+# ============================================================
+# NOAA 48-hr forecast (unchanged)
+# ============================================================
 def get_noaa_48hr_forecast(lat, lon):
+    """
+    Robust hourly forecast fetch from api.weather.gov.
+    Weather.gov requires a User-Agent with contact info.
+    Returns a DataFrame with at least columns: startTime, shortForecast, PoP.
+    """
     try:
-        # Step 1: Get forecast grid endpoint
+        headers = {
+            # <-- Put a real contact here per NWS policy
+            "User-Agent": "IrrigationDashboard/1.0 (contact: pamori2@huskers.unl.edu)",
+            "Accept": "application/geo+json",
+        }
+
+        # 1) Discover the forecast endpoints for this lat/lon
         meta_url = f"https://api.weather.gov/points/{lat},{lon}"
-        meta_resp = requests.get(meta_url, timeout=10)
+        meta_resp = requests.get(meta_url, headers=headers, timeout=12)
         meta_resp.raise_for_status()
-        forecast_url = meta_resp.json()["properties"]["forecastHourly"]
+        props = meta_resp.json().get("properties", {})
+        hourly_url = props.get("forecastHourly")
 
-        # Step 2: Get hourly forecast
-        forecast_resp = requests.get(forecast_url, timeout=10)
+        if not hourly_url:
+            # No hourly URL available for this coordinate → return empty
+            return pd.DataFrame()
+
+        # 2) Fetch the hourly forecast
+        forecast_resp = requests.get(hourly_url, headers=headers, timeout=12)
         forecast_resp.raise_for_status()
-        forecast_data = forecast_resp.json()["properties"]["periods"]
+        periods = forecast_resp.json().get("properties", {}).get("periods", [])
 
-        # Step 3: Convert to DataFrame
-        df = pd.DataFrame(forecast_data)
+        df = pd.DataFrame(periods)
+        if df.empty:
+            return df
 
-        # Optional: Extract chance of precipitation if available
+        # Normalize probability of precipitation (PoP) into a simple numeric column
         if "probabilityOfPrecipitation" in df.columns:
-            df["PoP"] = df["probabilityOfPrecipitation"].apply(
-                lambda x: x.get("value", 0) if isinstance(x, dict) else 0
-            )
+            def _pop(v):
+                if isinstance(v, dict):
+                    return v.get("value", 0) or 0
+                return 0
+            df["PoP"] = df["probabilityOfPrecipitation"].apply(_pop)
         else:
             df["PoP"] = 0
 
         return df
 
     except Exception as e:
-        print(f"Forecast fetch error: {e}")
-        return pd.DataFrame()  # return empty DataFrame to prevent app crash
+        # You can log or surface this if you like:
+        # st.caption(f"NOAA forecast error: {e}")
+        return pd.DataFrame()
 
 
-# ✅ Add these lines right after your imports:
-#MODEL_DIR = "models/trained"  # relative to where app.py is located
-MODEL_DIR  = os.path.join("models", "trained")
-model_path = os.path.join(MODEL_DIR, "XGBoost_vs4.pkl")
-scaler_path= os.path.join(MODEL_DIR, "scaler_vs4.pkl")
-
-st.set_page_config(page_title="🌱 Irrigation Dashboard", layout="wide")
-st.title("🌱 Irrigation Recommendation Dashboard")
-if "pred_df" not in st.session_state:
-    st.info(
-        "Enter field info → Load daily input data → click **🚀 Generate SWD Predictions** → Enter agronomic info → Enter weather station info → **📡 Fetch Weather Data**."
-    )
-
-
-# === Sidebar: model parameters ===
+# ============================================================
+# Sidebar inputs
+# ============================================================
 st.sidebar.subheader("📌 Field Information")
 field_name = st.sidebar.text_input("Enter Field Name:", value="VRI Field")
 field_lat = st.sidebar.number_input("Latitude (°)", value=41.165, format="%.6f")
 field_lon = st.sidebar.number_input("Longitude (°)", value=-96.430, format="%.6f")
-# Field location parameters for NOAA fallback
-#st.sidebar.subheader("🌾 Field Location (for NOAA Fallback)")
-#field_lat = st.sidebar.number_input("Field Latitude (°)", value=41.165)
-#field_lon = st.sidebar.number_input("Field Longitude (°)", value=-96.430)
-st.sidebar.subheader("📥 Load Daily Input for SWD Predictions")
-default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard/main/data/ImplementationSET_corn_complete.csv"
 
+st.sidebar.subheader("📥 Load Daily Input for SWD Predictions")
+
+# Local file upload (unchanged behavior)
 raw_file = st.sidebar.file_uploader("Upload daily input (CSV):", type=["csv"])
+
+# One-click demo: load same CSV from GitHub
+default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard/main/data/ImplementationSET_corn_complete.csv"
 load_default_btn = st.sidebar.button("📥 Load daily input data from GitHub", key="load_default")
+
+
+# Trigger predictions
 predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
 
-# If user doesn't upload anything, load the default from GitHub
-@st.cache_data(show_spinner=False)
-def _fetch_default_csv(url: str) -> pd.DataFrame:
-    r = requests.get(url, timeout=20)
-    r.raise_for_status()
-    return pd.read_csv(StringIO(r.text))
 
-# Build raw_df only on explicit action (upload OR button)
-raw_df = None
-if raw_file is not None:
-    raw_df = pd.read_csv(raw_file)
-    st.success("✅ Implementation dataset uploaded. **Next:** click **🚀 Generate SWD Predictions**.")
-elif load_default_btn:
-    try:
-        raw_df = _fetch_default_csv(default_url)
-        st.session_state["raw_df"] = raw_df  # persist across reruns
-        st.success("✅ Default daily input loaded from GitHub. **Next:** click **🚀 Generate SWD Predictions**.")
-    except Exception as e:
-        st.error(f"Could not load default dataset: {e}")
-
-# If nothing newly loaded this run, reuse what we loaded previously
-if raw_df is None:
-    raw_df = st.session_state.get("raw_df")
-
-
-
-#predict_button = st.sidebar.button("🚀 Generate SWD Predictions")
 st.sidebar.header("🔧 Model Parameters")
 FC = st.sidebar.number_input("Field Capacity (m³/m³)", value=0.41, step=0.01)
 WP = st.sidebar.number_input("Wilting Point (m³/m³)", value=0.19, step=0.01)
 f_dc = st.sidebar.slider("Fraction for Maximum Allowable Depletion (MAD fraction)", 0.1, 0.9, 0.5)
-# === Sidebar: key dates ===
+
 st.sidebar.header("📅 Key Dates")
-
-emergence_date = st.sidebar.date_input("🌱 Emergence Date (CGDD start):", pd.to_datetime("2024-05-05"))
-emergence_date = pd.to_datetime(emergence_date)
-
-date_max = st.sidebar.date_input("📌 Date Max (root depth max / Kcr max):", pd.to_datetime("2024-06-29"))
-date_max = pd.to_datetime(date_max)
-
-# 📅 Date Min (automatically one day after emergence)
+emergence_date = pd.to_datetime(st.sidebar.date_input("🌱 Emergence Date (CGDD start):", pd.to_datetime("2024-05-05")))
+date_max = pd.to_datetime(st.sidebar.date_input("📌 Date Max (root depth max / Kcr max):", pd.to_datetime("2024-06-29")))
 date_min = emergence_date + pd.Timedelta(days=1)
 
-# Weather station parameters
 st.sidebar.subheader("📍 Weather Station Parameters")
 elevation = st.sidebar.number_input("Elevation (m)", value=351.0)
 latitude_deg = st.sidebar.number_input("Latitude (°)", value=41.15)
@@ -251,7 +390,6 @@ albedo = st.sidebar.number_input("Albedo", value=0.23, step=0.01)
 Cn = st.sidebar.number_input("Cn", value=1600.0)
 Cd = st.sidebar.number_input("Cd", value=0.38)
 
-# NOAA station metadata
 noaa_stations = {
     "Mead (USC00256325)": {"id": "GHCND:USC00256325", "lat": 41.165, "lon": -96.430},
     "Mead (alt) (USC00256326)": {"id": "GHCND:USC00256326", "lat": 41.172, "lon": -96.478},
@@ -261,51 +399,192 @@ noaa_stations = {
     "Scottsbluff (USW00024045)": {"id": "GHCND:USW00024045", "lat": 41.893, "lon": -103.684},
 }
 
-# 🌦️ Weather source section
 st.sidebar.subheader("📡 Weather Source")
 use_api = st.sidebar.checkbox("Use Mesonet API", value=True)
 
 start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2024-05-03"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("2024-09-19"))
-start_str = start_date.strftime("%Y%m%d")
-end_str = end_date.strftime("%Y%m%d")
 
-noaa_token = st.secrets["NOAA_TOKEN"]
 
-# 🌾 If using Mesonet
+# If the user clicks "Load from GitHub", fetch the CSV and store it for use
+if load_default_btn:
+    try:
+        r = requests.get(default_url, timeout=20)
+        r.raise_for_status()
+        st.session_state["raw_df_default"] = pd.read_csv(io.StringIO(r.text))
+        st.success(f"✅ Loaded {len(st.session_state['raw_df_default']):,} rows from GitHub.")
+    except Exception as e:
+        st.error(f"Couldn't fetch default CSV: {e}")
+        
+# Optional 1-liner UX cue
+#if raw_file is not None:
+#    st.sidebar.success("Using uploaded CSV.")
+#elif "raw_df_default" in st.session_state:
+#    st.sidebar.info("Using GitHub demo CSV.")
+
+
+# --- Choose the raw input source for predictions ---
+source_df = None
+if raw_file is not None:
+    try:
+        source_df = pd.read_csv(raw_file)
+        st.sidebar.success(f"Using uploaded CSV ({source_df.shape[0]} rows).")
+    except Exception as e:
+        st.sidebar.error(f"Couldn't read uploaded CSV: {e}")
+elif "raw_df_default" in st.session_state:
+    source_df = st.session_state["raw_df_default"]
+    st.sidebar.info(f"Using GitHub demo CSV ({source_df.shape[0]} rows).")
+
+# Optional tiny debug line:
+st.sidebar.caption(f"Demo loaded: {'raw_df_default' in st.session_state}")
+
+
+# --- Quick, live checklist for users (place AFTER the sidebar inputs, BEFORE Mesonet/NOAA fetch) ---
+def _tick(done: bool) -> str:
+    return "✅" if done else "⬜"
+
+have_field_info   = bool(field_name)
+have_raw_input    = (raw_file is not None) or ("raw_df_default" in st.session_state)
+have_predictions  = "pred_df" in st.session_state
+have_weather      = "weather_df" in st.session_state
+weather_source_chosen = True  # you already present Mesonet/NOAA UI
+
+st.markdown(
+    f"""
+### 📋 How to use
+1. {_tick(have_field_info)} **Enter field info** (name & location)  
+2. {_tick(have_raw_input)} **Load daily input data** (upload CSV or use GitHub button)  
+3. {_tick(have_predictions)} **Click _🚀 Generate SWD Predictions_**  
+4. {_tick(True)} **Enter agronomic info** (FC, WP, MAD fraction, Key dates)  
+5. {_tick(True)} **Enter weather station info (Mesonet or NOAA)  
+   *(Tip: deselect **Use Mesonet API** to activate NOAA.)* 
+6. {_tick(have_weather)} **Click _📡 Fetch Weather Data_**  
+
+> **DEMO:** Use the defaults so everything matches:
+> - **Mesonet Station:** *Memphis 5N*  
+> - **Daily Input:** GitHub demo CSV (matches Memphis 5N dates/area)  
+>
+> In production, pick the station that **services your field** and make sure the **daily input** corresponds to the same field & season.
+"""
+)
+
+
+# ============================================================
+# Mesonet / NOAA fetch (agreport + chunking)  — UI + logic
+# ============================================================
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def fetch_agreport_station_list(network: str = "nemesonet") -> list[str]:
+    """
+    Try several public list endpoints and return a unique, sorted list of station names.
+    Some Mesonet deployments return an empty list for 'agreport' or require/ignore 'network'.
+    We also fall back to the older 'scqc1440' list (names are the same).
+    """
+    url = "https://awdn2.unl.edu/productdata/get"
+    names: set[str] = set()
+
+    attempts = [
+        {"list": "agreport", "network": network},
+        {"list": "agreport"},                     # no network
+        {"list": "scqc1440", "network": network}, # fallback: scqc list
+        {"list": "scqc1440"},                     # fallback: scqc, no network
+    ]
+
+    for params in attempts:
+        try:
+            r = requests.get(url, params=params, timeout=30)
+            r.raise_for_status()
+            data = r.json()
+            if isinstance(data, list):
+                names.update(d.get("name") for d in data
+                             if isinstance(d, dict) and d.get("name"))
+        except Exception:
+            # ignore and try the next variant
+            pass
+
+    return sorted(n for n in names if n)
+
+
 if use_api:
-    station_list = fetch_awdn2_station_list()
-    station_name = st.sidebar.selectbox("Select Weather Station:", station_list)
-    st.sidebar.text_input("Fallback NOAA Station ID (optional, used only if Mesonet fails)", key="fallback_noaa_id")
+    # --- MESONET UI ---
+    st.sidebar.subheader("📡 Mesonet (agreport)")
+    stations = fetch_agreport_station_list()
 
-    if st.sidebar.button("📡 Fetch Weather Data"):
-        with st.spinner("Fetching weather data..."):
+    if stations:
+        default_idx = stations.index("Memphis 5N") if "Memphis 5N" in stations else 0
+        meso_name = st.sidebar.selectbox(
+            "Mesonet Station (agreport)",
+            stations,
+            index=default_idx,
+            help="Choose the station name as shown on Mesonet."
+        )
+    else:
+        st.sidebar.info("Couldn't load the Mesonet station list. Type the name manually.")
+        meso_name = st.sidebar.text_input(
+            "Mesonet Station (agreport)",
+            value="Memphis 5N",
+            help="Exact station name, e.g., 'Memphis 5N'."
+        )
+
+    # Optional manual override regardless of dropdown
+    manual_station = st.sidebar.text_input("Or override with a station name", "")
+    if manual_station.strip():
+        meso_name = manual_station.strip()
+
+
+    tz_choice = st.sidebar.selectbox(
+        "Mesonet timezone for day alignment",
+        ["EST", "CST6CDT", "UTC", "MST", "PST"],
+        index=0,  # EST works reliably with agreport
+        help="This only affects which local midnight a day is assigned to."
+    )
+    chunk_days = st.sidebar.number_input(
+        "Chunk size (days per request)", min_value=10, max_value=50, value=30, step=1,
+        help="Smaller chunks reduce timeouts on long ranges."
+    )
+    st.sidebar.text_input("Fallback NOAA Station ID (optional if Mesonet fails)", key="fallback_noaa_id")
+
+    if st.sidebar.button("📡 Fetch Weather Data (Mesonet)"):
+        with st.spinner("Fetching Mesonet agreport (chunked, metric)…"):
             try:
-                weather_df = get_mesonet_weather(station_name, start_str, end_str)
+                weather_df = get_mesonet_weather(
+                    meso_name,
+                    start_date,
+                    end_date,
+                    tz=tz_choice,
+                    chunk_days=int(chunk_days),
+                    connect_timeout=10,
+                    read_timeout=120,
+                    verbose=False,
+                    show_progress=True,
+                )
                 if weather_df.empty:
-                    raise ValueError("Empty Mesonet data returned.")
-                st.success(f"✅ Weather data loaded from Mesonet: {station_name}")
+                    raise ValueError("Mesonet returned no rows in the requested window.")
+                st.success(f"✅ Mesonet data loaded for '{meso_name}'")
+                st.session_state["weather_df"] = weather_df
             except Exception as e:
                 st.warning(f"⚠️ Mesonet fetch failed: {e} — trying fallback NOAA...")
                 fallback_id = st.session_state.get("fallback_noaa_id", "")
                 if not fallback_id:
                     st.error("❌ No fallback NOAA ID provided.")
-                    st.stop()
-                try:
-                    weather_df = fetch_noaa_weather(noaa_token, fallback_id, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-                    if weather_df.empty:
-                        st.error("❌ NOAA fetch failed or returned no data.")
-                        st.stop()
-                    else:
-                        st.success(f"✅ NOAA fallback data loaded from {fallback_id}")
-                except Exception as ne:
-                    st.error(f"❌ NOAA fallback failed: {ne}")
-                    st.stop()
+                else:
+                    try:
+                        weather_df = fetch_noaa_weather(
+                            noaa_token,
+                            fallback_id,
+                            pd.to_datetime(start_date).strftime("%Y-%m-%d"),
+                            pd.to_datetime(end_date).strftime("%Y-%m-%d"),
+                        )
+                        if weather_df.empty:
+                            st.error("❌ NOAA fallback returned no data.")
+                        else:
+                            st.success(f"✅ NOAA fallback data loaded from {fallback_id}")
+                            st.session_state["weather_df"] = weather_df
+                    except Exception as ne:
+                        st.error(f"❌ NOAA fallback failed: {ne}")
 
-        st.session_state["weather_df"] = weather_df
-
-# 🌐 If not using Mesonet — manually fetch NOAA
 else:
+    # --- NOAA UI ---
     st.sidebar.subheader("📡 NOAA Weather Station")
     selected_station = st.sidebar.selectbox(
         "Select a NOAA Station",
@@ -313,138 +592,168 @@ else:
         index=None,
         placeholder="Choose a station..."
     )
+    fallback_noaa_manual = st.sidebar.text_input(
+        "Or manually enter NOAA Station ID (overrides dropdown)", ""
+    )
 
-    fallback_noaa_manual = st.sidebar.text_input("Or manually enter NOAA Station ID (overrides dropdown)", "")
-
+    station_id = None
     if selected_station:
-        station_meta = noaa_stations[selected_station]
-        station_id = station_meta["id"]
-        station_lat = station_meta["lat"]
-        station_lon = station_meta["lon"]
-
+        meta = noaa_stations[selected_station]
+        station_id = meta["id"]
         st.sidebar.success(f"Selected: {selected_station}")
         st.sidebar.markdown(f"**Station ID:** {station_id}")
-        st.sidebar.markdown(f"**Coordinates:** {station_lat:.3f}°, {station_lon:.3f}°")
-    else:
-        station_id = None
+        st.sidebar.markdown(f"**Coordinates:** {meta['lat']:.3f}°, {meta['lon']:.3f}°")
 
-    if st.sidebar.button("📡 Fetch Weather Data"):
+    if st.sidebar.button("📡 Fetch Weather Data (NOAA)"):
         with st.spinner("Fetching NOAA data..."):
             station_to_use = fallback_noaa_manual or station_id
             if not station_to_use:
                 st.error("❌ Please select or enter a NOAA station ID.")
-                st.stop()
-            try:
-                weather_df = fetch_noaa_weather(noaa_token, station_to_use, start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
-                if weather_df.empty:
-                    st.error("❌ NOAA fetch returned no data.")
-                    st.stop()
-                else:
-                    st.success(f"✅ NOAA data loaded from {station_to_use}")
-                    st.session_state["weather_df"] = weather_df
-            except Exception as e:
-                st.error(f"❌ NOAA API error: {e}")
-                st.stop()
+            else:
+                try:
+                    weather_df = fetch_noaa_weather(
+                        noaa_token,
+                        station_to_use,
+                        pd.to_datetime(start_date).strftime("%Y-%m-%d"),
+                        pd.to_datetime(end_date).strftime("%Y-%m-%d"),
+                    )
+                    if weather_df.empty:
+                        st.error("❌ NOAA fetch returned no data.")
+                    else:
+                        st.success(f"✅ NOAA data loaded from {station_to_use}")
+                        st.session_state["weather_df"] = weather_df
+                except Exception as e:
+                    st.error(f"❌ NOAA API error: {e}")
 
-        # GDD + ETr calculation block for any weather_df
-        if weather_df is not None:
-            st.session_state["weather_df"] = weather_df  # Save to session    
 
-# === File uploaders ===
+# ============================================================
+# File uploaders
+# ============================================================
 pred_file = st.sidebar.file_uploader("📄 Upload SWD Predictions CSV", type=["csv"])
 weather_file = st.sidebar.file_uploader("☀️ Upload Weather CSV", type=["csv"])
 
-# === Optional: Generate predictions from raw file ===
-#raw_file = st.sidebar.file_uploader("📥 Upload Implementation Dataset (CSV):", type=["csv"])
-#predict_button = st.sidebar.button("🚀 Generate SWD Predictions", key="generate_swd_button")
+# ============================================================
+# Manual weather CSV → take precedence if provided
+# Recognizes either:
+#  (A) your 8-col metric schema [Date, T_High_C, ..., Precip mm]
+#  (B) raw Mesonet "agreport" CSV (auto-converts via to_metric_8cols)
+# ============================================================
+if weather_file is not None:
+    try:
+        up = pd.read_csv(weather_file)
+        up.columns = [c.strip() for c in up.columns]
 
-#if predict_button and raw_df is not None:
-#    id_df = raw_df[['Date','Management Plot ID']].copy()
-#    X_features = raw_df.drop(columns=['Date'], errors='ignore')
+        metric_cols = {
+            "Date", "T_High_C", "T_Low_C", "Rel Hum %", "Soil Tmp C@10cm",
+            "Wind Sp. m/s", "SolarRad MJ/m^2/d", "Precip mm"
+        }
 
-    # ✅ Load model & scaler
-#    model = joblib.load(model_path)
-#    scaler = joblib.load(scaler_path)
+        if metric_cols.issubset(set(up.columns)):
+            # Already metric format
+            df_up = up.copy()
+            df_up["Date"] = pd.to_datetime(df_up["Date"], errors="coerce").dt.normalize()
+        elif "Timestamp" in up.columns and "Max Temperature (F)" in up.columns:
+            # Raw Mesonet agreport → convert
+            df_up = to_metric_8cols(up)
+        else:
+            st.error(
+                "Unrecognized weather CSV format.\n\n"
+                "Expected either the 8-column metric format "
+                "or a Mesonet 'agreport' CSV."
+            )
+            df_up = None
 
-    # ✅ Predict
-#    X_scaled = scaler.transform(X_features)
-#    predictions = model.predict(X_scaled)
+        if df_up is not None:
+            df_up = df_up.dropna(subset=["Date"]).sort_values("Date").reset_index(drop=True)
+            st.session_state["weather_df"] = df_up
+            st.success(
+                f"✅ Using uploaded weather CSV "
+                f"({len(df_up)} rows: {df_up['Date'].min().date()} → {df_up['Date'].max().date()})."
+            )
+    except Exception as e:
+        st.error(f"Couldn't read weather CSV: {e}")
 
-#    predictions_df = id_df.copy()
-#    predictions_df['SWD_predictions'] = predictions
 
-#    predictions_df.rename(columns={"Management Plot ID": "Management_Plot_ID"}, inplace=True)
+# ============================================================
+# Predictions pipeline (upload OR GitHub default; fallback to pred_file)
+# ============================================================
+source_df = None
+if raw_file is not None:
+    source_df = pd.read_csv(raw_file)
+elif "raw_df_default" in st.session_state:
+    source_df = st.session_state["raw_df_default"]
 
-    # ✅ Store in session_state so it persists
-#    st.session_state['pred_df'] = predictions_df
+if predict_button:
+    if source_df is None:
+        st.error("Please upload a CSV or click 'Load daily input data from GitHub' first.")
+    else:
+        raw_df = source_df.copy()
 
-#    st.success("✅ SWD Predictions generated successfully! Scroll down to proceed.")
+        # Flexible ID column (2 lines)
+        id_col = "Management Plot ID" if "Management Plot ID" in raw_df.columns else "Management_Plot_ID"
+        if "Date" not in raw_df.columns or id_col not in raw_df.columns:
+            st.error("Input must contain 'Date' and 'Management Plot ID' (or 'Management_Plot_ID').")
+        else:
+            id_df = raw_df[["Date", id_col]].copy()
+            X_features = raw_df.drop(columns=["Date"], errors="ignore").apply(pd.to_numeric, errors="coerce").fillna(0.0)
 
-    # 🔥 Feed predictions_df into the rest of the pipeline
-#    pred_df = predictions_df.copy()
+            model = joblib.load(model_path)
+            scaler = joblib.load(scaler_path)
 
-# --- Predict on click, using raw_df (uploaded OR default) ---
-# --- Predict on click, using raw_df (uploaded OR default) ---
-if predict_button and raw_df is not None:
-    # Required columns
-    if not {'Date', 'Management Plot ID'}.issubset(raw_df.columns):
-        st.error("Dataset must contain 'Date' and 'Management Plot ID'.")
-        st.stop()
+            # Align to scaler columns if available (3 lines)
+            exp = getattr(scaler, "feature_names_in_", None)
+            if exp is not None:
+                for c in exp:
+                    if c not in X_features.columns: X_features[c] = 0.0
+                X_features = X_features[exp]
 
-    # Ensure types
-    raw_df['Date'] = pd.to_datetime(raw_df['Date'], errors='coerce')
-    raw_df['Management Plot ID'] = pd.to_numeric(raw_df['Management Plot ID'], errors='coerce')
+            X_scaled = scaler.transform(X_features)
+            preds = model.predict(X_scaled)
 
-    # IDs for output
-    id_df = raw_df[['Date', 'Management Plot ID']].copy()
+            predictions_df = id_df.copy()
+            predictions_df["SWD_predictions"] = preds
+            predictions_df.rename(columns={id_col: "Management_Plot_ID"}, inplace=True)
+            predictions_df["Date"] = pd.to_datetime(predictions_df["Date"], errors="coerce").dt.normalize()
+            predictions_df = predictions_df.dropna(subset=["Date"]).reset_index(drop=True)
 
-    # ✅ Features: drop ONLY Date (keep MPID); keep numeric; fill NAs
-    X_features = (
-        raw_df.drop(columns=['Date'], errors='ignore')
-              .select_dtypes(include=[np.number])
-              .fillna(0.0)
-    )
+            st.session_state["pred_df"] = predictions_df
+            st.success("✅ SWD Predictions generated successfully! Scroll down to proceed.")
 
-    # Load artifacts
-    model = joblib.load(model_path)
-    scaler = joblib.load(scaler_path)
 
-    # Align feature order if the scaler exposes it
-    if hasattr(scaler, "feature_names_in_"):
-        expected = pd.Index(scaler.feature_names_in_)
-        orig_cols = X_features.columns
-        # Reindex to expected order; fill any missing columns with 0.0 and drop extras
-        X_features = X_features.reindex(columns=expected, fill_value=0.0)
+# Optional: allow dropping in a ready-made predictions CSV
+if "pred_df" not in st.session_state and pred_file is not None:
+    try:
+        tmp = pd.read_csv(pred_file)
+        if "Date" in tmp.columns:
+            tmp["Date"] = pd.to_datetime(tmp["Date"], errors="coerce").dt.normalize()
+            tmp = tmp.dropna(subset=["Date"]).reset_index(drop=True)
+        st.session_state["pred_df"] = tmp
+        st.success("✅ Loaded precomputed predictions CSV.")
+    except Exception as e:
+        st.error(f"Couldn't read predictions CSV: {e}")
 
-    # Transform & predict
-    X_scaled = scaler.transform(X_features)
-    predictions = model.predict(X_scaled)
-
-    # Output
-    predictions_df = id_df.rename(columns={"Management Plot ID": "Management_Plot_ID"})
-    predictions_df['SWD_predictions'] = predictions
-    st.session_state['pred_df'] = predictions_df
-    st.success("✅ SWD Predictions generated successfully! ! **Next:** scroll down to continue.")
-    pred_df = predictions_df.copy()
-
-# Check if predictions are generated OR a CSV is uploaded
-if 'pred_df' not in st.session_state:
-    if pred_file is not None:
-        st.session_state['pred_df'] = pd.read_csv(pred_file)
-
-# Use pred_df from session_state for pipeline
+# ============================================================
+# Main analysis (needs pred_df & weather_df)
+# ============================================================
 if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     pred_df = st.session_state['pred_df'].copy()
     weather_df = st.session_state['weather_df'].copy()
 
-    # Clean column names
+    # --- Clean columns + coerce both Date columns to *true* datetimes (midnight) ---
     weather_df.columns = weather_df.columns.str.strip()
 
-    # Ensure Date columns
-    pred_df['Date'] = pd.to_datetime(pred_df['Date'])
-    weather_df['Date'] = pd.to_datetime(weather_df['Date'])
+    pred_df['Date']    = pd.to_datetime(pred_df['Date'], errors='coerce').dt.normalize()
+    weather_df['Date'] = pd.to_datetime(weather_df['Date'], errors='coerce').dt.normalize()
 
-    # === GDD and CGDD calculations ===
+    # Drop any rows where Date failed to parse (prevents merge crashes)
+    pred_df = pred_df.dropna(subset=['Date'])
+    weather_df = weather_df.dropna(subset=['Date'])
+
+    # (Optional debug – shows you the dtypes in the UI)
+    st.caption(f"Date dtypes → pred_df: {pred_df['Date'].dtype} | weather_df: {weather_df['Date'].dtype}")
+
+
+    # === GDD & CGDD ===
     Tbase = 10.0
     Tmax_cap = 30.0
     weather_df['Tmax_Lim'] = weather_df['T_High_C'].clip(lower=Tbase, upper=Tmax_cap)
@@ -453,20 +762,21 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     weather_df['GDD'] = ((weather_df['Tmax_Lim'] + weather_df['Tmin_Lim']) / 2) - Tbase
     weather_df['GDD'] = weather_df['GDD'].clip(lower=0)
 
-    #emergence_date = pd.to_datetime("2024-05-05")
     weather_df = weather_df.sort_values('Date')
     weather_df['CGDD'] = 0.0
     mask = weather_df['Date'] >= emergence_date
     weather_df.loc[mask, 'CGDD'] = weather_df.loc[mask, 'GDD'].cumsum()
 
-    # === ETr calculations ===
+    # === ETr ===
     phi = math.pi * latitude_deg / 180
     Gsc = 4.92
     sigma = 4.901e-9
     G = 0.0
     weather_df['doy'] = weather_df['Date'].dt.dayofyear
-    weather_df['es'] = (0.6108 * np.exp((17.27 * weather_df['T_High_C'])/(weather_df['T_High_C']+237.3)) +
-                        0.6108 * np.exp((17.27 * weather_df['T_Low_C'])/(weather_df['T_Low_C']+237.3))) / 2
+    weather_df['es'] = (
+        0.6108 * np.exp((17.27 * weather_df['T_High_C'])/(weather_df['T_High_C']+237.3)) +
+        0.6108 * np.exp((17.27 * weather_df['T_Low_C'])/(weather_df['T_Low_C']+237.3))
+    ) / 2
     weather_df['ea'] = (weather_df['Rel Hum %'] / 100.0) * weather_df['es']
     weather_df['dr'] = 1 + 0.033 * np.cos(2 * np.pi * weather_df['doy'] / 365)
     weather_df['delta'] = 0.409 * np.sin((2 * np.pi * weather_df['doy'] / 365) - 1.39)
@@ -474,33 +784,24 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     weather_df['Ra'] = (24/np.pi * Gsc * weather_df['dr'] *
                         (weather_df['ws']*np.sin(phi)*np.sin(weather_df['delta']) +
                          np.cos(phi)*np.cos(weather_df['delta'])*np.sin(weather_df['ws'])))
-    # === Estimate solar radiation Rs (MJ/m^2/day) using Hargreaves-Samani if missing ===
+
     if 'SolarRad MJ/m^2/d' not in weather_df.columns:
-        if latitude_deg < 20:
-            kRs = 0.19  # coastal
-        else:
-            kRs = 0.16  # inland
-
+        kRs = 0.19 if latitude_deg < 20 else 0.16
         st.info(f"☀️ Estimating solar radiation using Hargreaves method with kRs={kRs}")
-
         weather_df['SolarRad MJ/m^2/d'] = (
-            kRs * np.sqrt(weather_df['T_High_C'] - weather_df['T_Low_C']) * weather_df['Ra']
+            kRs * np.sqrt((weather_df['T_High_C'] - weather_df['T_Low_C']).clip(lower=0)) * weather_df['Ra']
         )
         weather_df['SolarRad MJ/m^2/d_source'] = 'Estimated (Hargreaves)'
     else:
         weather_df['SolarRad MJ/m^2/d_source'] = 'Observed'
 
     weather_df['Rso'] = (0.75 + 2e-5 * elevation) * weather_df['Ra']
-
-    # === Handle missing Solar Radiation column for NOAA fallback ===
-    #if "SolarRad MJ/m^2/d" not in weather_df.columns:
-        #st.warning("⚠️ 'SolarRad MJ/m^2/d' not found in NOAA data — ETr will be NaN.")
-        #weather_df["SolarRad MJ/m^2/d"] = np.nan
     weather_df['fcd'] = 1.35 * np.minimum(np.maximum(weather_df['SolarRad MJ/m^2/d'] / weather_df['Rso'], 0.3), 1.0) - 0.35
     weather_df['Rns'] = (1 - albedo) * weather_df['SolarRad MJ/m^2/d']
-    weather_df['Rnl'] = sigma * weather_df['fcd'] * (0.34 - 0.14*np.sqrt(weather_df['ea'])) * (
+    weather_df['Rnl'] = sigma * weather_df['fcd'] * (0.34 - 0.14*np.sqrt(np.maximum(weather_df['ea'], 0))) * (
         ((weather_df['Tmax_Lim']+273.16)**4 + (weather_df['Tmin_Lim']+273.16)**4)/2 )
     weather_df['Rn'] = weather_df['Rns'] - weather_df['Rnl']
+
     P = 101.3 * (((293 - 0.0065*elevation)/293)**5.26)
     gamma = 0.000665 * P
     weather_df['delta_slope'] = (2503*np.exp((17.27*weather_df['Tavg'])/(weather_df['Tavg']+237.3))) / ((weather_df['Tavg']+237.3)**2)
@@ -512,9 +813,13 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     )
 
     # === Merge with predictions
-    df = pred_df.merge(weather_df[['Date', 'GDD', 'CGDD', 'ETr']], on='Date', how='left')
+    df = pred_df.merge(
+    weather_df[['Date', 'GDD', 'CGDD', 'ETr']],
+    on='Date',
+    how='left'
+    )
 
-    # === Compute Kcr
+    # === Kcr / ETa
     def compute_kcr(cgdd):
         if cgdd < 100: return 0.4
         elif cgdd < 600: return 0.4 + 0.0012*(cgdd-100)
@@ -524,9 +829,7 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     df['Kcr'] = df['CGDD'].apply(compute_kcr)
     df['ETa'] = df['ETr'] * df['Kcr']
 
-    # === Water balance (MAD, TD, Recommended irrigation)
-    #date_min = pd.to_datetime("2024-05-06")
-    #date_max = pd.to_datetime("2024-06-29")
+    # === Water balance
     def calc_root_depth(d):
         if d <= date_min: return 100
         elif d >= date_max: return 1000
@@ -541,162 +844,90 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     df['Recommended_Irrigation_mm'] = (df['SWD_predictions'] - df['TD']).clip(lower=0)
     irrigation_recommended = df['Recommended_Irrigation_mm'].iloc[-1] > 0
 
-
-    # Optional forecast suggestion based on irrigation need
+    # Optional forecast suggestion
     if irrigation_recommended:
         st.warning("⚠️ Irrigation is recommended. Consider checking upcoming rainfall forecasts.")
-
         if st.checkbox("🔍 View 48-hour NOAA Rainfall Forecast", key="forecast_toggle"):
             forecast_df = get_noaa_48hr_forecast(field_lat, field_lon)
-
             if forecast_df.empty:
                 st.error("❌ Forecast could not be loaded. Please check internet connection or NOAA API.")
             else:
-                # Convert time and calculate forecast hour
                 forecast_df["time"] = pd.to_datetime(forecast_df["startTime"])
                 forecast_df["Hour"] = range(len(forecast_df))
-
                 now_utc = datetime.now(timezone.utc)
                 forecast_start = forecast_df["time"].iloc[0]
                 current_hour_index = int((now_utc - forecast_start).total_seconds() // 3600)
 
-                # Create Altair chart
                 line = alt.Chart(forecast_df).mark_line(point=True).encode(
                     x=alt.X("Hour:Q", title="Forecast Hour (0–155)"),
                     y=alt.Y("PoP:Q", title="Precipitation Probability (%)"),
                     tooltip=["time:T", "shortForecast:N", "PoP:Q"]
                 ).properties(title="🌧️ 48-Hour NOAA Rainfall Forecast")
 
-                now_rule = alt.Chart(pd.DataFrame({
-                    "Hour": [current_hour_index]
-                })).mark_rule(color="red", strokeDash=[5, 5], strokeWidth=3).encode(x="Hour:Q")
+                now_rule = alt.Chart(pd.DataFrame({"Hour": [current_hour_index]})).mark_rule(
+                    color="red", strokeDash=[5, 5], strokeWidth=3
+                ).encode(x="Hour:Q")
 
                 st.altair_chart((line + now_rule).interactive(), use_container_width=True)
-
-                # Table view of the forecast
-                forecast_df["Hour"] = range(len(forecast_df))  # Add this line
-                st.dataframe(forecast_df[["Hour", "shortForecast", "PoP"]].head(10).rename(columns={
-                    "shortForecast": "Forecast",
-                    "PoP": "Precipitation Probability (%)"
-                }))
-
-
+                forecast_df["Hour"] = range(len(forecast_df))
+                st.dataframe(
+                    forecast_df[["Hour", "shortForecast", "PoP"]].head(10).rename(
+                        columns={"shortForecast": "Forecast", "PoP": "Precipitation Probability (%)"}
+                    )
+                )
 
     # === Dashboard
     plot_ids = df['Management_Plot_ID'].unique()
     selected_id = st.selectbox("Select a Plot ID:", plot_ids)
     filtered = df[df['Management_Plot_ID'] == selected_id]
 
-    # ✅ Date range slider
     min_date = filtered['Date'].min().date()
     max_date = filtered['Date'].max().date()
-    date_range = st.slider(
-        "📅 Select Date Range:",
-        min_value=min_date,
-        max_value=max_date,
-        value=(min_date, max_date),
-        format="MM/DD/YYYY"
-    )
-
-    # Filter by selected date range
+    date_range = st.slider("📅 Select Date Range:", min_value=min_date, max_value=max_date,
+                           value=(min_date, max_date), format="MM/DD/YYYY")
     filtered = filtered[(filtered['Date'].dt.date >= date_range[0]) & (filtered['Date'].dt.date <= date_range[1])]
 
-    # ✅ Metrics selector
     metrics = st.multiselect(
         "📊 Select variables to plot:",
         ["SWD_predictions", "MAD", "TD", "Kcr", "ETr", "ETa"],
         default=["SWD_predictions"]
     )
 
-    # ✅ Melt the data for selected metrics into long format
-    melted = filtered.melt(
-        id_vars=['Date'],
-        value_vars=metrics,
-        var_name='Variable',
-        value_name='Value'
-    )
+    melted = filtered.melt(id_vars=['Date'], value_vars=metrics, var_name='Variable', value_name='Value')
+    color_map = {'SWD_predictions': 'blue','MAD': 'red','TD': 'green','Kcr': 'purple','ETr': 'gray','ETa': 'brown'}
 
-    # ✅ Define color mapping with legend-friendly colors
-    color_map = {
-        'SWD_predictions': 'blue',
-        'MAD': 'red',
-        'TD': 'green',
-        'Kcr': 'purple',
-        'ETr': 'gray',       # changed to gray
-        'ETa': 'brown'
-    }
-
-    # ✅ Build base chart with short date format and legend
     line_chart = alt.Chart(melted).mark_line(strokeWidth=2).encode(
-        x=alt.X(
-            'Date:T',
-            title='Date',
-            axis=alt.Axis(format='%m/%d', labelAngle=-45, labelFontSize=12, titleFontSize=14)
-        ),
-        y=alt.Y(
-            'Value:Q',
-            title='Values (mm or unit)',
-            axis=alt.Axis(labelFontSize=12, titleFontSize=14)
-        ),
-        color=alt.Color(
-            'Variable:N',
-            scale=alt.Scale(domain=list(color_map.keys()), range=list(color_map.values())),
-            legend=alt.Legend(title="Variables", labelFontSize=12, titleFontSize=14, orient='top', direction='horizontal')
-        ),
+        x=alt.X('Date:T', title='Date', axis=alt.Axis(format='%m/%d', labelAngle=-45, labelFontSize=12, titleFontSize=14)),
+        y=alt.Y('Value:Q', title='Values (mm or unit)', axis=alt.Axis(labelFontSize=12, titleFontSize=14)),
+        color=alt.Color('Variable:N',
+                        scale=alt.Scale(domain=list(color_map.keys()), range=list(color_map.values())),
+                        legend=alt.Legend(title="Variables", labelFontSize=12, titleFontSize=14, orient='top', direction='horizontal')),
         tooltip=['Date:T', 'Variable:N', 'Value:Q']
-    ).properties(
-        width=1500,
-        height=450,
-        #title=f"Selected Metrics for Plot {selected_id}"
-        #title=f"Selected Variables for {field_name} – Plot {selected_id}"
-    )
+    ).properties(width=1500, height=450)
 
-    # ✅ Merge predicted irrigation and weather precipitation
     merged_df = pd.merge(
         filtered[['Date', 'Recommended_Irrigation_mm']],
         weather_df[['Date', 'Precip mm']],
-        on='Date',
-        how='inner'  # Use 'outer' if needed
+        on='Date', how='inner'
     )
-
-    # ✅ Melt for combined chart with unified y-axis
     plot_df = merged_df.melt(id_vars='Date', var_name='Metric', value_name='Value')
 
-    # ✅ Define chart components
-    color_scale = alt.Scale(domain=['Recommended_Irrigation_mm', 'Precip mm'],
-                            range=['orange', '#2B9CE2'])
-
-    # ✅ Separate bar and line marks by condition
-    bars = alt.Chart(plot_df[plot_df['Metric'] == 'Recommended_Irrigation_mm']).mark_bar(
-        opacity=0.7
-    ).encode(
+    bars = alt.Chart(plot_df[plot_df['Metric'] == 'Recommended_Irrigation_mm']).mark_bar(opacity=0.7).encode(
         x=alt.X('Date:T', axis=alt.Axis(format='%m/%d', labelAngle=-45)),
         y=alt.Y('Value:Q', title='Depth of water (mm)'),
         color=alt.value('orange'),
         tooltip=['Date:T', 'Metric:N', 'Value:Q']
     )
-
-    lines = alt.Chart(plot_df[plot_df['Metric'] == 'Precip mm']).mark_line(
-        strokeWidth=2,
-        color='#2B9CE2'
-    ).encode(
-        x='Date:T',
-        y='Value:Q',
-        tooltip=['Date:T', 'Metric:N', 'Value:Q']
+    lines = alt.Chart(plot_df[plot_df['Metric'] == 'Precip mm']).mark_line(strokeWidth=2, color='#2B9CE2').encode(
+        x='Date:T', y='Value:Q', tooltip=['Date:T', 'Metric:N', 'Value:Q']
     )
-
-    # ✅ Overlay chart with shared y-axis
     combined_chart = alt.layer(bars, lines).properties(
-        width=1500,
-        height=400,
-        title='Irrigation Recommendations with Precipitation Overlay'
+        width=1500, height=400, title='Irrigation Recommendations with Precipitation Overlay'
     )
 
-    # ✅ Display charts
     st.altair_chart(line_chart, use_container_width=True)
     st.altair_chart(combined_chart, use_container_width=True)
 
-    # ✅ Show rounded table
     st.write("### 📑 Recommendations Table")
     cols_to_move = ["GDD", "CGDD", "ETr", "Kcr", "ETa", "Recommended_Irrigation_mm"]
     other_cols = [c for c in filtered.columns if c not in cols_to_move]
@@ -706,7 +937,6 @@ if 'pred_df' in st.session_state and 'weather_df' in st.session_state:
     st.download_button(
         "📥 Download CSV",
         data=ordered.to_csv(index=False).encode('utf-8'),
-        #file_name="Irrigation_Recommendations.csv",
         file_name=f"Irrigation_Recommendations_{field_name.replace(' ','_')}.csv",
         mime='text/csv'
     )
