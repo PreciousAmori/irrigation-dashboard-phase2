@@ -542,7 +542,7 @@ if use_api:
 
     tz_choice = st.sidebar.selectbox(
         "Mesonet timezone for day alignment",
-        ["EST", "CST6CDT", "UTC", "MST", "PST"],
+        ["CST6CDT", "EST", "UTC", "MST", "PST"],
         index=0,  # EST works reliably with agreport
         help="This only affects which local midnight a day is assigned to."
     )
