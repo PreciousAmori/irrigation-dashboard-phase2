@@ -367,7 +367,7 @@ st.sidebar.subheader("📥 Load Daily Input for SWD Predictions")
 raw_file = st.sidebar.file_uploader("Upload daily input (CSV):", type=["csv"])
 
 # One-click demo: load same CSV from GitHub
-default_url = "https://github.com/PreciousAmori/irrigation-dashboard-phase2/tree/main/data/SCAL_Corn_Field_2023.csv"
+default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard-phase2/main/data/SCAL_Corn_Field_2023.csv"
 load_default_btn = st.sidebar.button("📥 Load daily input data from GitHub", key="load_default")
 
 
@@ -530,8 +530,8 @@ if use_api:
         st.sidebar.info("Couldn't load the Mesonet station list. Type the name manually.")
         meso_name = st.sidebar.text_input(
             "Mesonet Station (agreport)",
-            value="Memphis 5N",
-            help="Exact station name, e.g., 'Memphis 5N'."
+            value="Harvard 4SW",
+            help="Exact station name, e.g., 'Harvard 4SW'."
         )
 
     # Optional manual override regardless of dropdown
