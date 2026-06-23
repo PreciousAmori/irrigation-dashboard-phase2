@@ -1,194 +1,134 @@
-# 🌱 Irrigation Recommendation Dashboard
+# 🌱 Irrigation Recommendation Dashboard – Phase 2
 
-This Streamlit app integrates Mesonet (agreport) and NOAA weather data, as well as other features,
-uses an XGBoost model to predict Soil Water Depletion (SWD), and generates
-management plot-level irrigation recommendations. It supports chunked agreport fetches
-with timezone fallback, manual weather and daily model input CSV upload, CGDD/ETr/ETa calculations,
-precipitation forecasts, and interactive visualizations.
+This Streamlit application provides field-scale irrigation recommendations using a transferable machine learning framework developed from multi-environment field data across Nebraska. The dashboard integrates weather data, agronomic parameters, and a Leave-One-Site-Out (LOSO) XGBoost model to predict Soil Water Depletion (SWD) and support irrigation decision-making across diverse production environments.
 
-Author: Precious Amori
+**Author:** Precious Amori
 
 ---
 
-## ✨ Features
+## Overview
 
-- Mesonet **agreport** fetch (chunked, robust, metric conversion)
-- NOAA daily data + 48-hr forecast
-- Manual **weather CSV** upload (8-column metric or raw agreport)
-- One-click **demo daily input** loader from GitHub
-- SWD prediction (XGBoost) + irrigation recommendation table & charts
-- Clear in-app checklist + demo defaults (Memphis 5N)
+The Phase 2 dashboard is powered by a transferable XGBoost model trained using data from multiple field sites spanning Nebraska's hydroclimatic gradient. The framework was developed to improve model generalization beyond a single field or season and to support irrigation recommendations under diverse environmental conditions.
 
 ---
 
-## 🚀 Quickstart (Local)
+## Features
+
+* Transferable LOSO XGBoost SWD prediction model
+* Nebraska Mesonet (agreport) weather integration
+* NOAA weather data and forecast support
+* Automatic calculation of:
+
+  * Growing Degree Days (GDD)
+  * Cumulative GDD (CGDD)
+  * Reference Evapotranspiration (ETr)
+  * Crop Evapotranspiration (ETa)
+* Plot-level irrigation recommendations
+* Weather data upload support
+* Interactive visualizations and downloadable recommendations
+
+---
+
+## Model Information
+
+**Model:**
+
+```text
+XGB_loso_scal.joblib
+```
+
+**Training Strategy:**
+
+* Multi-site training
+* Leave-One-Site-Out (LOSO) validation
+* Developed using field datasets spanning Nebraska's east-west hydroclimatic gradient
+
+---
+
+## Quick Start
 
 ```bash
-# 1) clone
-git clone https://github.com/PreciousAmori/irrigation-dashboard.git
-cd irrigation-dashboard
+git clone https://github.com/PreciousAmori/irrigation-dashboard-phase2.git
 
-# 2) create env (examples)
-# conda create -n irrigation-ml python=3.10 -y && conda activate irrigation-ml
-# or: python -m venv .venv && . .venv/Scripts/activate  # (Windows)
+cd irrigation-dashboard-phase2
 
-# 3) install
 pip install -r requirements.txt
 
-# 4) secrets for local runs
-# create: .streamlit/secrets.toml  (see below)
-
-# 5) run
 streamlit run app.py
+```
 
+---
 
+## Demo Dataset
 
-🧪 Demo mode
+The repository includes a demonstration dataset:
 
-In the sidebar:
+```text
+data/SCAL_Corn_Field_2023.csv
+```
 
-Click “📥 Load daily input data from GitHub”
+To use:
 
-Keep Mesonet Station = “Memphis 5N”
+1. Load the demo dataset from GitHub or upload manually.
+2. Generate SWD predictions.
+3. Enter agronomic parameters.
+4. Fetch weather data.
+5. Review irrigation recommendations and download results.
 
-Click “🚀 Generate SWD Predictions”
+---
 
-Enter agronomic params if needed
+## Repository Structure
 
-Fetch weather via Mesonet (or uncheck to use NOAA)
+```text
+irrigation-dashboard-phase2/
+├── app.py
+├── data/
+│   └── SCAL_Corn_Field_2023.csv
+├── models/
+│   └── trained/
+│       └── XGB_loso_scal.joblib
+├── requirements.txt
+└── README.md
+```
 
-Demo CSV lives at
-data/ImplementationSET_corn_complete.csv
+---
 
+## Typical Workflow
 
-Project structure
+1. Enter field information.
+2. Load daily input data.
+3. Generate SWD predictions.
+4. Enter agronomic parameters.
+5. Fetch weather data.
+6. Review irrigation recommendations.
+7. Download recommendation results.
 
-irrigation-dashboard/
-├─ app.py
-├─ data/
-│  └─ ImplementationSET_corn_complete.csv
-├─ models/
-│  └─ trained/
-│     ├─ XGBoost_vs4.pkl
-│     └─ scaler_vs4.pkl
-├─ requirements.txt
-└─ .streamlit/
-   └─ secrets.toml           # (local only)
+---
 
+## Deployment
 
-📄 CSV Schemas
-A) Daily input (for predictions)
+### Streamlit Community Cloud
 
-Must include at least:
+1. Push repository to GitHub.
+2. Create a new Streamlit application.
+3. Connect the repository.
+4. Add required secrets (NOAA token if used).
+5. Deploy.
 
-Date (any parseable date format; normalized internally)
+---
 
-Management Plot ID (or Management_Plot_ID)
+## Acknowledgements
 
-All other columns are model features and are scaled automatically.
+This project was developed as part of research on precision irrigation and transferable machine learning for agricultural water management.
 
+Data sources and supporting organizations include:
 
-B) Weather (metric 8-column schema)
+* Nebraska Mesonet (UNL)
+* NOAA
+* USDA-NIFA Cyber-Physical Systems (CPS) Project
+* University of Nebraska–Lincoln
+* USDA NRCS Web Soil Survey
+* Planet Labs PBC
 
-You can upload this directly, or it’s produced from Mesonet agreport:
-
-| Column            | Units     |
-| ----------------- | --------- |
-| Date              | —         |
-| T_High_C          | °C        |
-| T_Low_C           | °C        |
-| Rel Hum %         | %         |
-| Soil Tmp C@10cm   | °C        |
-| Wind Sp. m/s      | m/s       |
-| SolarRad MJ/m^2/d | MJ/m²/day |
-| Precip mm         | mm        |
-
-
-C) Raw Mesonet agreport (auto-converted)
-
-If you upload the CSV directly from Mesonet agreport, the app converts it to the 8-column metric table. It expects headers like:
-
-Timestamp
-
-Max Temperature (F), Min Temperature (F)
-
-Relative Humidity (%)
-
-Soil Temperature at 4 inches (F)
-
-Solar Radiation (MJ/m^2/day)
-
-Precipitation (in)
-
-Wind Speed (mph)
-
-
-🧭 Typical workflow
-
-Enter field info → name & coordinates
-
-Load daily input (upload CSV or GitHub button)
-
-Click 🚀 Generate SWD Predictions
-
-Set agronomic parameters (FC, WP, MAD)
-
-Choose weather source
-
-Keep Use Mesonet API for Mesonet agreport
-
-Uncheck to switch to NOAA
-
-📡 Fetch Weather Data
-
-Explore charts & download the recommendations CSV
-
-
-🧰 Troubleshooting
-
-Model not found
-Ensure models/trained/XGBoost_vs4.pkl and models/trained/scaler_vs4.pkl exist (case-sensitive paths on Linux).
-
-Manual daily CSV upload fails
-The app now uses the file-like buffer directly and rewinds before reading. If issues persist, make sure the file is a valid CSV and not empty.
-
-NOAA forecast missing
-NOAA requires a User-Agent with contact info; this is set in the code. Ensure NOAA_TOKEN is configured and your internet connection is healthy.
-
-
-📦 Deployment (Streamlit Cloud)
-
-Push this repo to GitHub
-
-In Streamlit Cloud: New app → Connect repo → Select branch
-
-Add Secrets (NOAA_TOKEN)
-
-Deploy
-
-
-🤝 Contributing
-
-PRs welcome! Please open an issue first if you’d like to propose larger changes.
-
-
-📜 License
-
-MIT © 2025 Precious Amori
-
-
-🙏 Acknowledgements
-
-This project integrates multiple open datasets and APIs to support research in precision irrigation and nitrogen management.
-
-Special thanks to:
-
-- Nebraska Mesonet (UNL) — for providing weather and soil data via the `agreport` API  
-- NOAA NCEI / Weather.gov — for daily and hourly meteorological datasets  
-- Planet Labs PBC — for providing access to PlanetScope satellite imagery used in related analysis and validation workflows  
-- USDA NRCS Web Soil Survey (WSS) — for soil property and classification data supporting model input and field interpretation  
-- USDA-NIFA Cyber-Physical Systems (CPS) Project — for funding and research support  
-- University of Nebraska–Lincoln, Department of Biological Systems Engineering — for field operations, instrumentation, and academic support  
-
-> PlanetScope imagery © 2023–2025 Planet Labs PBC, used under research license.  
-> Soil data © USDA NRCS Web Soil Survey (WSS).
+```
+```
