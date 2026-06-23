@@ -50,7 +50,7 @@ st.title("🌱 Irrigation Recommendation Dashboard")
 import io
 from urllib.parse import quote
 
-BASE = "https://awdn2.unl.edu/productdata/get"
+BASE = "https://awdn.unl.edu/productdata/get"
 
 def _ymd(d) -> str:
     return pd.to_datetime(d).strftime("%Y%m%d")
