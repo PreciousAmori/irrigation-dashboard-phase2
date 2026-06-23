@@ -469,8 +469,8 @@ st.markdown(
 6. {_tick(have_weather)} **Click _📡 Fetch Weather Data_**  
 
 > **DEMO:** Use the defaults so everything matches:
-> - **Mesonet Station:** *Memphis 5N*  
-> - **Daily Input:** GitHub demo CSV (matches Memphis 5N dates/area)  
+> - **Mesonet Station:** *Harvard 4SW*  
+> - **Daily Input:** GitHub demo CSV (matches Harvard 4SW dates/area)  
 >
 > In production, pick the station that **services your field** and make sure the **daily input** corresponds to the same field & season.
 """
@@ -519,7 +519,7 @@ if use_api:
     stations = fetch_agreport_station_list()
 
     if stations:
-        default_idx = stations.index("Memphis 5N") if "Memphis 5N" in stations else 0
+        default_idx = stations.index("Harvard 4SW") if "Harvard 4SW" in stations else 0
         meso_name = st.sidebar.selectbox(
             "Mesonet Station (agreport)",
             stations,
