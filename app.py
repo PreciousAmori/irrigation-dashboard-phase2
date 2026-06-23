@@ -34,15 +34,14 @@ noaa_token = st.secrets["NOAA_TOKEN"]  # NOAA stays the same
 # Model paths (use in-repo copies with underscore names)
 # =========================
 MODEL_DIR = os.path.join("models", "trained")
-model_path = os.path.join(MODEL_DIR, "XGBoost_vs4.pkl")  # underscore
-scaler_path = os.path.join(MODEL_DIR, "scaler_vs4.pkl")  # underscore
+model_path = os.path.join(MODEL_DIR, "XGB_loso_scal.joblib")
 
 
 # =========================
 # Streamlit page setup
 # =========================
 st.set_page_config(page_title="🌱 Irrigation Dashboard", layout="wide")
-st.title("🌱 Irrigation Recommendation Dashboard")
+st.title("🌱 Irrigation Recommendation Dashboard - Phase 2")
 
 # ============================================================
 # Mesonet helpers (NEW — agreport + chunking, metric output)
@@ -713,18 +712,20 @@ if predict_button:
             id_df = raw_df[["Date", id_col]].copy()
             X_features = raw_df.drop(columns=["Date"], errors="ignore").apply(pd.to_numeric, errors="coerce").fillna(0.0)
 
+        
             model = joblib.load(model_path)
-            scaler = joblib.load(scaler_path)
 
-            # Align to scaler columns if available (3 lines)
-            exp = getattr(scaler, "feature_names_in_", None)
+            # Align to model columns
+            exp = getattr(model, "feature_names_in_", None)
             if exp is not None:
                 for c in exp:
-                    if c not in X_features.columns: X_features[c] = 0.0
+                    if c not in X_features.columns:
+                        X_features[c] = 0.0
+
                 X_features = X_features[exp]
 
-            X_scaled = scaler.transform(X_features)
-            preds = model.predict(X_scaled)
+            preds = model.predict(X_features)
+         
 
             predictions_df = id_df.copy()
             predictions_df["SWD_predictions"] = preds
