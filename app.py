@@ -406,7 +406,7 @@ noaa_stations = {
 st.sidebar.subheader("📡 Weather Source")
 use_api = st.sidebar.checkbox("Use Mesonet API", value=True)
 
-start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2023-05-03"))
+start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2023-05-17"))
 end_date = st.sidebar.date_input("End Date", pd.to_datetime("2023-09-30"))
 
 
