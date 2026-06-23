@@ -357,9 +357,9 @@ def get_noaa_48hr_forecast(lat, lon):
 # Sidebar inputs
 # ============================================================
 st.sidebar.subheader("📌 Field Information")
-field_name = st.sidebar.text_input("Enter Field Name:", value="VRI Field")
-field_lat = st.sidebar.number_input("Latitude (°)", value=41.165, format="%.6f")
-field_lon = st.sidebar.number_input("Longitude (°)", value=-96.430, format="%.6f")
+field_name = st.sidebar.text_input("Enter Field Name:", value="SCAL Field")
+field_lat = st.sidebar.number_input("Latitude (°)", value=40.580, format="%.6f")
+field_lon = st.sidebar.number_input("Longitude (°)", value=-98.129, format="%.6f")
 
 st.sidebar.subheader("📥 Load Daily Input for SWD Predictions")
 
@@ -367,7 +367,7 @@ st.sidebar.subheader("📥 Load Daily Input for SWD Predictions")
 raw_file = st.sidebar.file_uploader("Upload daily input (CSV):", type=["csv"])
 
 # One-click demo: load same CSV from GitHub
-default_url = "https://raw.githubusercontent.com/PreciousAmori/irrigation-dashboard/main/data/ImplementationSET_corn_complete.csv"
+default_url = "https://github.com/PreciousAmori/irrigation-dashboard-phase2/tree/main/data/SCAL_Corn_Field_2023.csv"
 load_default_btn = st.sidebar.button("📥 Load daily input data from GitHub", key="load_default")
 
 
@@ -381,14 +381,14 @@ WP = st.sidebar.number_input("Wilting Point (m³/m³)", value=0.19, step=0.01)
 f_dc = st.sidebar.slider("Fraction for Maximum Allowable Depletion (MAD fraction)", 0.1, 0.9, 0.5)
 
 st.sidebar.header("📅 Key Dates")
-emergence_date = pd.to_datetime(st.sidebar.date_input("🌱 Emergence Date (CGDD start):", pd.to_datetime("2024-05-05")))
-date_max = pd.to_datetime(st.sidebar.date_input("📌 Date Max (root depth max / Kcr max):", pd.to_datetime("2024-06-29")))
+emergence_date = pd.to_datetime(st.sidebar.date_input("🌱 Emergence Date (CGDD start):", pd.to_datetime("2023-05-17")))
+date_max = pd.to_datetime(st.sidebar.date_input("📌 Date Max (root depth max / Kcr max):", pd.to_datetime("2023-07-11")))
 date_min = emergence_date + pd.Timedelta(days=1)
 
 st.sidebar.subheader("📍 Weather Station Parameters")
-elevation = st.sidebar.number_input("Elevation (m)", value=351.0)
-latitude_deg = st.sidebar.number_input("Latitude (°)", value=41.15)
-longitude_deg = st.sidebar.number_input("Longitude (°)", value=-96.42)
+elevation = st.sidebar.number_input("Elevation (m)", value=556.0)
+latitude_deg = st.sidebar.number_input("Latitude (°)", value=40.57)
+longitude_deg = st.sidebar.number_input("Longitude (°)", value=-98.13)
 wind_hgt = st.sidebar.number_input("Wind Measurement Height (m)", value=3.0)
 albedo = st.sidebar.number_input("Albedo", value=0.23, step=0.01)
 Cn = st.sidebar.number_input("Cn", value=1600.0)
@@ -406,8 +406,8 @@ noaa_stations = {
 st.sidebar.subheader("📡 Weather Source")
 use_api = st.sidebar.checkbox("Use Mesonet API", value=True)
 
-start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2024-05-03"))
-end_date = st.sidebar.date_input("End Date", pd.to_datetime("2024-09-19"))
+start_date = st.sidebar.date_input("Start Date", pd.to_datetime("2023-05-03"))
+end_date = st.sidebar.date_input("End Date", pd.to_datetime("2023-09-30"))
 
 
 # If the user clicks "Load from GitHub", fetch the CSV and store it for use
