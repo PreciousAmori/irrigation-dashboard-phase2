@@ -489,7 +489,7 @@ def fetch_agreport_station_list(network: str = "nemesonet") -> list[str]:
     Some Mesonet deployments return an empty list for 'agreport' or require/ignore 'network'.
     We also fall back to the older 'scqc1440' list (names are the same).
     """
-    url = "https://awdn2.unl.edu/productdata/get"
+    url = "https://awdn.unl.edu/productdata/get"
     names: set[str] = set()
 
     attempts = [
